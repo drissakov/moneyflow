@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+  <title id="title">MoneyFlow</title>
+  <desc id="desc">Личные финансы. Android, Go и PostgreSQL. Точные суммы и собственный сервер.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#082b25"/><stop offset="1" stop-color="#1d6b57"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a7f3d0"/><stop offset="1" stop-color="#6ee7b7"/></linearGradient>
+  </defs>
+  <rect x="1" y="1" width="1198" height="298" rx="28" fill="url(#bg)" stroke="#34765f" stroke-width="2"/>
+  <circle cx="1120" cy="280" r="155" fill="#3ccf91" opacity=".07"/>
+  <circle cx="1090" cy="15" r="100" fill="#c4b5fd" opacity=".06"/>
+  <rect x="52" y="62" width="100" height="100" rx="28" fill="url(#accent)"/>
+  <text x="102" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-weight="800" font-size="68" fill="#0c3b30">M</text>
+  <text x="182" y="133" font-family="Arial, sans-serif" font-weight="750" font-size="67" fill="#f0fdf4">MoneyFlow</text>
+  <text x="185" y="176" font-family="Arial, sans-serif" font-size="22" fill="#b8ddd0">Личные финансы · собственный сервер · точные суммы</text>
+  <g font-family="Arial, sans-serif" font-size="16" font-weight="600">
+    <rect x="52" y="215" width="180" height="38" rx="19" fill="#216849" stroke="#4da87f"/>
+    <text x="142" y="239" text-anchor="middle" fill="#dcfce7">ANDROID + KOTLIN</text>
+    <rect x="246" y="215" width="146" height="38" rx="19" fill="#184b66" stroke="#4081a1"/>
+    <text x="319" y="239" text-anchor="middle" fill="#dbeafe">GO REST API</text>
+    <rect x="406" y="215" width="156" height="38" rx="19" fill="#3b365f" stroke="#8376ae"/>
+    <text x="484" y="239" text-anchor="middle" fill="#ede9fe">POSTGRESQL</text>
+    <rect x="576" y="215" width="130" height="38" rx="19" fill="#4b4834" stroke="#a69765"/>
+    <text x="641" y="239" text-anchor="middle" fill="#fef3c7">MVP 0.1.0</text>
+  </g>
+  <rect x="920" y="48" width="224" height="204" rx="24" fill="#123d32" stroke="#477e66"/>
+  <text x="945" y="89" font-family="Arial, sans-serif" font-size="15" letter-spacing="1.4" fill="#aad2c0">DEMO ACCOUNT</text>
+  <text x="945" y="146" font-family="Arial, sans-serif" font-weight="700" font-size="42" fill="#f0fdf4">87,01 ₸</text>
+  <path d="M945 171 H1119" stroke="#568d73" stroke-width="1"/>
+  <text x="945" y="204" font-family="Arial, sans-serif" font-size="16" fill="#b9dec9">100,00 − 12,99</text>
+  <circle cx="953" cy="228" r="4" fill="#6ee7b7"/>
+  <text x="965" y="233" font-family="Arial, sans-serif" font-size="13" fill="#a7f3d0">Подтверждено сервером</text>
+</svg>
