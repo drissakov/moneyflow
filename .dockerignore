@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+android
+web
+**/build
+**/.gradle
+**/bin
+*.apk
+*.log

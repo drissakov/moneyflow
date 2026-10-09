@@ -1,0 +1,61 @@
+name: moneyflow
+
+x-backend: &backend
+  image: moneyflow-backend:local
+  build:
+    context: ..
+    dockerfile: infra/backend.Dockerfile
+  environment: &backend-environment
+    DATABASE_URL: postgres://${POSTGRES_USER:-moneyflow}:${POSTGRES_PASSWORD:-moneyflow_dev_password}@db:5432/${POSTGRES_DB:-moneyflow}?sslmode=disable
+    PORT: "8080"
+    SESSION_TTL: ${SESSION_TTL:-720h}
+    APP_ENV: development
+    GIN_MODE: release
+  init: true
+
+services:
+  db:
+    image: postgres:17.11-alpine3.23
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-moneyflow}
+      POSTGRES_USER: ${POSTGRES_USER:-moneyflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-moneyflow_dev_password}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    entrypoint: ["/app/migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *backend
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

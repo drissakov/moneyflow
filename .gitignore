@@ -26,6 +26,19 @@ go.work.sum
 
 # env file
 .env
+.env.*
+!.env.example
+!.env.production.example
+
+# Android and local build output
+.gradle/
+**/build/
+local.properties
+*.apk
+*.aab
+.idea/
+backend/bin/
+*.log
 
 # Editor/IDE
 # .idea/

@@ -1,0 +1,556 @@
+openapi: 3.0.3
+info:
+  title: MoneyFlow API
+  version: 0.1.0
+  description: |
+    Android MVP API. PostgreSQL is the authoritative store. All authenticated
+    reads and writes are scoped to the authenticated user; a client cannot send
+    a user ID to choose another owner. Ownership failures return 404.
+
+    Money travels as canonical base-10 integer strings in minor units to avoid
+    floating-point rounding. USD, EUR, and KZT have two minor-unit decimal places;
+    JPY has zero and KWD has three. Individual amounts and opening balances are
+    limited to 1,000,000,000,000,000 minor units. Calculated balances use signed
+    64-bit integers. Writes that would overflow a balance are rejected atomically.
+
+    Requests contain one JSON object, reject unknown fields, and have a 16 KiB
+    body limit. RFC3339 timestamps include a timezone. Authentication tokens are
+    opaque bearer credentials with an expiry; logout revokes the current token.
+servers:
+  - url: http://localhost:8080
+    description: Local development; Android emulator uses http://10.0.2.2:8080
+  - url: https://api.example.com
+    description: Replace with your HTTPS production domain
+tags:
+  - name: Health
+  - name: Authentication
+  - name: Accounts
+  - name: Transactions
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      operationId: health
+      summary: Check process liveness
+      security: []
+      responses:
+        '200':
+          description: The HTTP process is running; does not query the database.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+  /readyz:
+    get:
+      tags: [Health]
+      operationId: readiness
+      summary: Check database readiness
+      security: []
+      responses:
+        '200':
+          description: The API can reach PostgreSQL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: PostgreSQL is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/auth/register:
+    post:
+      tags: [Authentication]
+      operationId: register
+      summary: Register a user and start a session
+      security: []
+      requestBody:
+        $ref: '#/components/requestBodies/Credentials'
+      responses:
+        '201':
+          $ref: '#/components/responses/SessionCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: An account already exists for the normalized email address.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: Start a session using email and password
+      security: []
+      requestBody:
+        $ref: '#/components/requestBodies/Credentials'
+      responses:
+        '200':
+          $ref: '#/components/responses/SessionCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: The email or password is incorrect.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      summary: Revoke the current session
+      responses:
+        '204':
+          description: Session revoked; response has no body.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/me:
+    get:
+      tags: [Authentication]
+      operationId: currentUser
+      summary: Read the authenticated user
+      responses:
+        '200':
+          description: Authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/accounts:
+    get:
+      tags: [Accounts]
+      operationId: listAccounts
+      summary: List the authenticated user's accounts and current balances
+      responses:
+        '200':
+          description: An empty list is returned when the user has no accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accounts]
+                additionalProperties: false
+                properties:
+                  accounts:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Account'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+    post:
+      tags: [Accounts]
+      operationId: createAccount
+      summary: Create an account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccount'
+            example:
+              name: Cash
+              currency: KZT
+              opening_balance_minor: '500000'
+      responses:
+        '201':
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/transactions:
+    get:
+      tags: [Transactions]
+      operationId: listTransactions
+      summary: List the most recent transactions for an owned account
+      parameters:
+        - name: account_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Transactions for this account; an empty list is valid.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [transactions]
+                additionalProperties: false
+                properties:
+                  transactions:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+    post:
+      tags: [Transactions]
+      operationId: createTransaction
+      summary: Record an income or expense exactly once
+      description: |
+        Generate an Idempotency-Key UUID once per intended transaction and retain
+        it until the result is known. Retry the same request with the same key
+        after an uncertain network result. An identical retry returns the
+        original transaction and status 201. The same key with different data
+        returns 409. Keys are scoped to the authenticated user. Account currency
+        is inferred by the server and cannot be overridden in this request.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransaction'
+            example:
+              account_id: 69739b8c-8d9c-4adc-930c-f8c37e9dd8f1
+              kind: expense
+              amount_minor: '1299'
+              note: Lunch
+              occurred_at: '2026-10-09T12:30:00+05:00'
+      responses:
+        '201':
+          description: Transaction created, or the result of an identical retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Idempotency key reused with different data, or balance overflow.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: Use the access_token returned from registration or login.
+  requestBodies:
+    Credentials:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Credentials'
+  responses:
+    SessionCreated:
+      description: New authenticated session.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Session'
+    BadRequest:
+      description: Invalid JSON, unknown fields, missing fields, or validation failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Bearer token is missing, invalid, expired, or revoked.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource does not exist or belongs to another user.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    PayloadTooLarge:
+      description: Request body exceeds 16 KiB.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: Too many authentication attempts from this remote address.
+      headers:
+        Retry-After:
+          description: Seconds before trying again.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnsupportedMediaType:
+      description: Content-Type must be application/json.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RequestTimeout:
+      description: Request exceeded its processing deadline. Retry uncertain transaction writes using the same idempotency key.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Unexpected server or database error; sensitive details are omitted.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+    Credentials:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: One ASCII email address, trimmed and lowercased by the server.
+          example: developer@example.com
+        password:
+          type: string
+          format: password
+          description: Between 12 and 128 UTF-8 bytes. Passwords are not trimmed.
+          writeOnly: true
+    User:
+      type: object
+      required: [id, email]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+    Session:
+      type: object
+      required: [access_token, expires_at, user]
+      additionalProperties: false
+      properties:
+        access_token:
+          type: string
+          description: Opaque secret. Send it in the Authorization bearer header.
+        expires_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+    Currency:
+      type: string
+      enum: [USD, EUR, KZT, JPY, KWD]
+    PositiveMinorAmount:
+      type: string
+      pattern: '^(?:[1-9][0-9]{0,14}|1000000000000000)$'
+      maxLength: 16
+      description: Canonical positive integer string, at most 10^15 minor units.
+      example: '1299'
+    OpeningMinorBalance:
+      type: string
+      pattern: '^(?:0|-?(?:[1-9][0-9]{0,14}|1000000000000000))$'
+      maxLength: 17
+      description: Canonical integer string with absolute value at most 10^15. Negative zero is invalid.
+      example: '0'
+    CalculatedMinorBalance:
+      type: string
+      pattern: '^(?:0|-?[1-9][0-9]{0,18})$'
+      maxLength: 20
+      description: Canonical signed 64-bit integer string, from -9223372036854775808 to 9223372036854775807.
+      example: '48701'
+    CreateAccount:
+      type: object
+      required: [name, currency, opening_balance_minor]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Trimmed before validation; 1 to 100 Unicode characters.
+        currency:
+          $ref: '#/components/schemas/Currency'
+        opening_balance_minor:
+          allOf:
+            - $ref: '#/components/schemas/OpeningMinorBalance'
+    Account:
+      type: object
+      required: [id, name, currency, opening_balance_minor, balance_minor, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        currency:
+          $ref: '#/components/schemas/Currency'
+        opening_balance_minor:
+          $ref: '#/components/schemas/OpeningMinorBalance'
+        balance_minor:
+          $ref: '#/components/schemas/CalculatedMinorBalance'
+        created_at:
+          type: string
+          format: date-time
+    TransactionKind:
+      type: string
+      enum: [expense, income]
+    CreateTransaction:
+      type: object
+      required: [account_id, kind, amount_minor, occurred_at]
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TransactionKind'
+        amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        note:
+          type: string
+          maxLength: 500
+          default: ''
+          description: At most 500 Unicode characters.
+        occurred_at:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp with a timezone, year 0001 through 9999.
+    Transaction:
+      type: object
+      required: [id, account_id, kind, amount_minor, currency, note, occurred_at, created_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TransactionKind'
+        amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        currency:
+          $ref: '#/components/schemas/Currency'
+        note:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              description: Stable machine-readable error code.
+              example: invalid_request
+            message:
+              type: string
+              description: Human-readable explanation.
+              example: amount_minor must be a positive integer string

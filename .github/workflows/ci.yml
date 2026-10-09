@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.11-alpine3.23
+        env:
+          POSTGRES_DB: moneyflow_test
+          POSTGRES_USER: moneyflow
+          POSTGRES_PASSWORD: ci_only_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U moneyflow -d moneyflow_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      TEST_DATABASE_URL: postgres://moneyflow:ci_only_password@localhost:5432/moneyflow_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version: '1.25.14'
+          cache-dependency-path: backend/go.sum
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Static analysis
+        run: go vet ./...
+      - name: Unit and PostgreSQL integration tests
+        run: go test -race -count=1 ./...
+      - name: Build server and migration runner
+        run: go build ./cmd/api ./cmd/migrate
+
+  android:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle.kts
+            android/gradle/wrapper/gradle-wrapper.properties
+      - name: Install Android SDK packages
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"'
+      - name: Build, lint, and run unit tests
+        run: bash ./gradlew --no-daemon :app:assembleDebug :app:lintDebug :app:testDebugUnitTest
+      - name: Upload debug APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: moneyflow-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
