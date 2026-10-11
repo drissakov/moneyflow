@@ -2,7 +2,9 @@
 
 Native Android MVP: Kotlin, Jetpack Compose / Material 3, ViewModel + StateFlow,
 coroutines, Retrofit and Room. Minimum Android 8.0 (API 26); target / compile API 35.
-The app has Russian UI and supports KZT, USD, EUR, JPY and KWD.
+The app has Russian UI and supports 11 curated currencies: KZT, USD, EUR, JPY,
+KWD, RUB, GBP, CHF, AUD, CAD and CNY. This is the application's supported catalog,
+not the full upstream provider catalog.
 
 ## Run locally
 
@@ -27,6 +29,16 @@ credentials over a shared network during local development.
 .\gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
 ```
 
+With an emulator or device connected, run migration/isolation/concurrency tests:
+
+```powershell
+.\gradlew.bat :app:connectedDebugAndroidTest
+```
+
+Tests use dedicated databases and separate preferences, preserving the user's app
+database and login session. Room migration 1 → 2 adds preferences/portfolio caches
+without deleting existing accounts or transactions.
+
 ## Release configuration
 
 Set an HTTPS API URL when building for release:
@@ -43,6 +55,19 @@ or credentials are stored in the project. Cleartext traffic is blocked in releas
 
 - Email/password registration and sign-in; password policy is 12–128 UTF-8 bytes.
 - Create accounts with exact signed opening balances, then record income/expenses.
+- Choose a preferred base currency. It is stored per user on the server, with a
+  local per-user fallback (default KZT). Offline changes remain marked pending and
+  are synchronized before the next preference read; concurrent updates serialize.
+- The dashboard presents the original balances alongside a Frankfurter estimate
+  in the base currency. Quotes show their provider observation dates and retrieval
+  time. Missing quotes produce an explicitly incomplete estimate with a labeled
+  partial amount, never a full total. Stale rates are marked; cached rates older
+  than the default 7-day observation/retrieval window are hidden.
+- The converter calls the server and displays its exact rounded result. It is a
+  reference calculation: it does not exchange money or create ledger operations.
+  Rates are decimal strings parsed with BigDecimal, with no client floating point
+  or recomputation from the rounded display rate. Same-currency conversion needs
+  no external quote.
 - Financial input uses `BigDecimal` → exact signed 64-bit minor units. USD/EUR/KZT
   use 2 digits, JPY 0, KWD 3. Neither parsing nor formatting uses floating point.
   Each submitted amount is bounded to ±1,000,000,000,000,000 minor units, matching
@@ -50,6 +75,10 @@ or credentials are stored in the project. Cleartext traffic is blocked in releas
 - Each user's accounts and latest 50 transactions per selected account are cached
   in app-private Room tables and displayed from Room. Cached reads remain available
   while an unexpired local session exists. Writes require server confirmation.
+  Portfolio snapshots are cached per user/base only and are shown only while their
+  account IDs, currencies and balances match the current Room records. Writes
+  invalidate snapshots, and older in-flight reads cannot repopulate them. Explicit
+  logout deletes financial caches/snapshots; per-user currency choices remain local.
 - Access tokens and pending transaction requests are AES-GCM encrypted with a
   key held by Android Keystore. Passwords are not persisted. Android backup is off.
 - Before sending a transaction, the exact payload and its idempotency key are
@@ -69,5 +98,5 @@ Screens use semantic text labels and test tags (`auth_email`, `auth_password`,
 `transaction_submit`, `retry_pending`, `refresh`, `logout`).
 
 Transfers, category management, edits, refresh tokens and queued offline writes
-are future milestones. There is no automatic currency conversion or combined
-balance across currencies.
+are future milestones. The combined balance is an informational valuation; account
+balances are never automatically converted or rewritten.

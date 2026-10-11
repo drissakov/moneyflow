@@ -8,6 +8,8 @@ import com.moneyflow.app.data.domain.User
 import com.moneyflow.app.data.local.AccountEntity
 import com.moneyflow.app.data.local.MoneyFlowDatabase
 import com.moneyflow.app.data.local.TransactionEntity
+import com.moneyflow.app.data.local.FxPreferencesEntity
+import com.moneyflow.app.data.local.PortfolioSnapshotEntity
 import com.moneyflow.app.data.remote.AuthResponse
 import com.moneyflow.app.data.remote.CreateAccountRequest
 import com.moneyflow.app.data.remote.CreateTransactionRequest
@@ -17,6 +19,12 @@ import com.moneyflow.app.data.remote.ErrorBody
 import com.moneyflow.app.data.remote.validateUuid
 import com.moneyflow.app.data.remote.isDefinitiveTransactionFailure
 import com.moneyflow.app.data.remote.matchesTransactionRequest
+import com.moneyflow.app.data.remote.ConversionDto
+import com.moneyflow.app.data.remote.ConvertRequest
+import com.moneyflow.app.data.remote.CurrencyCatalogueDto
+import com.moneyflow.app.data.remote.PortfolioDto
+import com.moneyflow.app.data.remote.PreferencesDto
+import com.moneyflow.app.data.domain.SupportedCurrency
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
@@ -30,6 +38,9 @@ import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import java.util.Locale
 import java.util.UUID
+import java.time.Instant
+
+data class CachedPortfolio(val portfolio: PortfolioDto, val receivedAt: Instant)
 
 class MoneyFlowRepository(
     private val database: MoneyFlowDatabase,
@@ -37,6 +48,8 @@ class MoneyFlowRepository(
     apiProvider: (() -> String?) -> MoneyFlowApi,
 ) {
     private val mutex = Mutex()
+    private val preferenceSyncMutex = Mutex()
+    private var portfolioRevision = 0L
     private val _session = MutableStateFlow(store.readSession())
     val session: StateFlow<Session?> = _session.asStateFlow()
     private val _pending = MutableStateFlow(_session.value?.user?.id?.let(store::readPending))
@@ -49,6 +62,78 @@ class MoneyFlowRepository(
 
     fun observeTransactions(userId: String, accountId: String): Flow<List<MoneyTransaction>> =
         dao.observeTransactions(userId, accountId).map { rows -> rows.map(TransactionEntity::toDomain) }
+
+    fun observePreferences(userId: String): Flow<FxPreferencesEntity> = dao.observePreferences(userId).map {
+        it?.takeIf { row -> runCatching { SupportedCurrency.fromCode(row.baseCurrency) }.isSuccess }
+            ?: FxPreferencesEntity(userId, "KZT", false)
+    }
+
+    fun observePortfolio(userId: String, base: String): Flow<CachedPortfolio?> = dao.observePortfolio(userId, base).map { row ->
+        row?.let {
+            runCatching {
+                val portfolio = Gson().fromJson(it.payload, PortfolioDto::class.java).validated()
+                require(portfolio.baseCurrency == base && it.userId == userId)
+                CachedPortfolio(portfolio, Instant.parse(it.receivedAt))
+            }.getOrNull()
+        }
+    }
+
+    suspend fun refreshCurrencies(): CurrencyCatalogueDto {
+        val current = requireSession()
+        return api.currencies("Bearer ${current.token}").validated()
+    }
+
+    /** Local choice is durable immediately; an offline change is synchronized before the next read. */
+    suspend fun setBaseCurrency(base: String) {
+        SupportedCurrency.fromCode(base)
+        val current = requireSession()
+        mutex.withLock {
+            if (!isCurrentSession(current)) return
+            dao.putPreferences(FxPreferencesEntity(current.user.id, base, true))
+        }
+        refreshPreferences()
+    }
+
+    suspend fun refreshPreferences() = preferenceSyncMutex.withLock {
+        val current = requireSession()
+        val before = mutex.withLock { dao.preferences(current.user.id) }
+        val remote = if (before?.pendingSync == true) {
+            api.setPreferences(PreferencesDto(before.baseCurrency), "Bearer ${current.token}").validated().also {
+                require(it.baseCurrency == before.baseCurrency) { "Сервер вернул другую основную валюту" }
+            }
+        } else api.preferences("Bearer ${current.token}").validated()
+        mutex.withLock {
+            if (!isCurrentSession(current) || dao.preferences(current.user.id) != before) return@withLock
+            dao.putPreferences(FxPreferencesEntity(current.user.id, remote.baseCurrency, false))
+        }
+    }
+
+    suspend fun preferredBaseCurrency(): String {
+        val current = requireSession()
+        return dao.preferences(current.user.id)?.baseCurrency ?: "KZT"
+    }
+
+    suspend fun refreshPortfolio(base: String): PortfolioDto {
+        SupportedCurrency.fromCode(base)
+        val current = requireSession()
+        val revision = mutex.withLock { portfolioRevision }
+        val portfolio = api.portfolio(base, "Bearer ${current.token}").validated()
+        require(portfolio.baseCurrency == base) { "Сервер вернул обзор в другой валюте" }
+        mutex.withLock {
+            val selectedBase = dao.preferences(current.user.id)?.baseCurrency ?: "KZT"
+            if (isCurrentSession(current) && selectedBase == base && revision == portfolioRevision) {
+                dao.putPortfolio(PortfolioSnapshotEntity(current.user.id, base, Gson().toJson(portfolio), Instant.now().toString()))
+            }
+        }
+        return portfolio
+    }
+
+    suspend fun convert(request: ConvertRequest): ConversionDto {
+        val current = requireSession()
+        val result = api.convert(request, "Bearer ${current.token}").validated(request)
+        check(isCurrentSession(current)) { "Сессия изменилась" }
+        return result
+    }
 
     suspend fun authenticate(email: String, password: String, register: Boolean) = withContext(Dispatchers.IO) {
         val credentials = Credentials(email.trim().lowercase(Locale.ROOT), password)
@@ -99,6 +184,7 @@ class MoneyFlowRepository(
             if (userId != null) database.withTransaction {
                 dao.deleteAccounts(userId)
                 dao.deleteUserTransactions(userId)
+                dao.deletePortfolios(userId)
             }
         }
     }
@@ -136,7 +222,11 @@ class MoneyFlowRepository(
         require(account.name == body.name && account.currency == body.currency &&
             account.openingBalanceMinor.toString() == body.openingBalanceMinor) { "Ответ сервера не соответствует создаваемому счёту" }
         mutex.withLock {
-            if (_session.value?.user?.id == userId) dao.putAccounts(listOf(AccountEntity.from(userId, account)))
+            if (_session.value?.user?.id == userId) database.withTransaction {
+                dao.putAccounts(listOf(AccountEntity.from(userId, account)))
+                portfolioRevision++
+                dao.deletePortfolios(userId)
+            }
         }
         return account
     }
@@ -181,8 +271,10 @@ class MoneyFlowRepository(
             val definitiveFailure = isDefinitiveTransactionFailure(error.code(), errorCode)
             if (definitiveFailure) withContext(Dispatchers.IO) {
                 mutex.withLock {
-                    store.clearPending(request.userId)
-                    _pending.value = null
+                    if (store.readPending(request.userId)?.key == request.key) store.clearPending(request.userId)
+                    if (_pending.value?.userId == request.userId && _pending.value?.key == request.key) {
+                        _pending.value = null
+                    }
                 }
             }
             throw error
@@ -190,9 +282,15 @@ class MoneyFlowRepository(
         withContext(Dispatchers.IO) {
             mutex.withLock {
                 if (_session.value?.user?.id == request.userId) {
-                    dao.putTransactions(listOf(TransactionEntity.from(request.userId, transaction)))
-                    store.clearPending(request.userId)
-                    _pending.value = null
+                    database.withTransaction {
+                        dao.putTransactions(listOf(TransactionEntity.from(request.userId, transaction)))
+                        portfolioRevision++
+                        dao.deletePortfolios(request.userId)
+                    }
+                    if (store.readPending(request.userId)?.key == request.key) store.clearPending(request.userId)
+                    if (_pending.value?.userId == request.userId && _pending.value?.key == request.key) {
+                        _pending.value = null
+                    }
                 }
             }
         }
@@ -201,4 +299,8 @@ class MoneyFlowRepository(
 
     private fun requireUserId(): String = _session.value?.user?.id
         ?: throw IllegalStateException("Войдите в аккаунт")
+
+    private fun requireSession(): Session = _session.value ?: throw IllegalStateException("Войдите в аккаунт")
+    private fun isCurrentSession(session: Session): Boolean =
+        _session.value?.token == session.token && _session.value?.user?.id == session.user.id
 }

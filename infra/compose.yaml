@@ -9,6 +9,9 @@ x-backend: &backend
     DATABASE_URL: postgres://${POSTGRES_USER:-moneyflow}:${POSTGRES_PASSWORD:-moneyflow_dev_password}@db:5432/${POSTGRES_DB:-moneyflow}?sslmode=disable
     PORT: "8080"
     SESSION_TTL: ${SESSION_TTL:-720h}
+    FRANKFURTER_URL: ${FRANKFURTER_URL:-https://api.frankfurter.dev/v2}
+    FX_CACHE_TTL: ${FX_CACHE_TTL:-6h}
+    FX_MAX_STALE: ${FX_MAX_STALE:-168h}
     APP_ENV: development
     GIN_MODE: release
   init: true

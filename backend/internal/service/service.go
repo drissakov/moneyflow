@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/drissakov/moneyflow/backend/internal/auth"
+	"github.com/drissakov/moneyflow/backend/internal/fx"
 	"gorm.io/gorm"
 )
 
@@ -33,14 +34,39 @@ type Service struct {
 	sessionTTL time.Duration
 	hashSlots  chan struct{}
 	dummyHash  string
+	fxCache    *fx.Cache
 }
 
-func New(db *gorm.DB, sessionTTL time.Duration) (*Service, error) {
+type Options struct {
+	FXProvider fx.Provider
+	FXCacheTTL time.Duration
+	FXMaxStale time.Duration
+	Now        func() time.Time
+}
+
+func New(db *gorm.DB, sessionTTL time.Duration, options ...Options) (*Service, error) {
+	opts := Options{FXCacheTTL: 6 * time.Hour, FXMaxStale: 7 * 24 * time.Hour}
+	if len(options) > 1 {
+		return nil, errors.New("only one service options value is supported")
+	}
+	if len(options) == 1 {
+		opts = options[0]
+		if opts.FXCacheTTL == 0 {
+			opts.FXCacheTTL = 6 * time.Hour
+		}
+		if opts.FXMaxStale == 0 {
+			opts.FXMaxStale = 7 * 24 * time.Hour
+		}
+	}
+	if opts.FXCacheTTL < time.Minute || opts.FXCacheTTL > 24*time.Hour || opts.FXMaxStale < time.Hour || opts.FXMaxStale > 30*24*time.Hour || opts.FXMaxStale < opts.FXCacheTTL {
+		return nil, errors.New("invalid FX cache durations")
+	}
 	dummy, err := auth.HashPassword("This dummy value is never a real user password.")
 	if err != nil {
 		return nil, err
 	}
-	return &Service{DB: db, sessionTTL: sessionTTL, hashSlots: make(chan struct{}, 2), dummyHash: dummy}, nil
+	return &Service{DB: db, sessionTTL: sessionTTL, hashSlots: make(chan struct{}, 2), dummyHash: dummy,
+		fxCache: fx.NewCache(db, opts.FXProvider, opts.FXCacheTTL, opts.FXMaxStale, opts.Now)}, nil
 }
 
 func (s *Service) acquireHashSlot(ctx context.Context) (func(), error) {

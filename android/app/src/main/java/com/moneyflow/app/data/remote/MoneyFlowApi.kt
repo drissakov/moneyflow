@@ -12,6 +12,7 @@ import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Query
 
 data class Credentials(val email: String, val password: String)
@@ -107,6 +108,24 @@ interface MoneyFlowApi {
         @Header("Idempotency-Key") key: String,
         @Body body: CreateTransactionRequest,
     ): TransactionDto
+    @GET("api/v1/currencies") suspend fun currencies(@Header("Authorization") authorization: String): CurrencyCatalogueDto
+    @GET("api/v1/preferences") suspend fun preferences(@Header("Authorization") authorization: String): PreferencesDto
+    @PUT("api/v1/preferences") suspend fun setPreferences(
+        @Body body: PreferencesDto,
+        @Header("Authorization") authorization: String,
+    ): PreferencesDto
+    @GET("api/v1/exchange-rates") suspend fun exchangeRates(
+        @Query("base") base: String,
+        @Header("Authorization") authorization: String,
+    ): ExchangeRatesDto
+    @POST("api/v1/convert") suspend fun convert(
+        @Body body: ConvertRequest,
+        @Header("Authorization") authorization: String,
+    ): ConversionDto
+    @GET("api/v1/portfolio") suspend fun portfolio(
+        @Query("base") base: String,
+        @Header("Authorization") authorization: String,
+    ): PortfolioDto
 }
 
 internal fun validateUuid(value: String) {

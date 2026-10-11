@@ -6,6 +6,7 @@ type User struct {
 	ID           string `gorm:"type:uuid;primaryKey"`
 	Email        string
 	PasswordHash string
+	BaseCurrency string `gorm:"default:KZT"`
 	CreatedAt    time.Time
 }
 

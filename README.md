@@ -5,7 +5,7 @@
 # 💸 MoneyFlow
 
 **Личные финансы в Android-приложении с собственным сервером.**<br>
-Счета, доходы, расходы и точные балансы — Kotlin / Jetpack Compose + Go / PostgreSQL.
+Счета, доходы, расходы, общий баланс и конвертер валют — Kotlin / Jetpack Compose + Go / PostgreSQL + Frankfurter.
 
 [![CI](https://github.com/drissakov/moneyflow/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/drissakov/moneyflow/actions/workflows/ci.yml) [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](backend/go.mod) [![Kotlin](https://img.shields.io/badge/Kotlin-2.1.21-7F52FF?logo=kotlin&logoColor=white)](android/build.gradle.kts) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](android/app/build.gradle.kts) [![Compose](https://img.shields.io/badge/Jetpack_Compose-Material_3-4285F4?logo=jetpackcompose&logoColor=white)](android/app/src/main/java/com/moneyflow/app/ui/MoneyFlowApp.kt) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](infra/compose.yaml) [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](infra/compose.yaml) [![Status](https://img.shields.io/badge/Статус-MVP-F59E0B)](#features)
 
@@ -20,7 +20,7 @@
 
 MoneyFlow — pet-проект для учета личных финансов с русским Android-интерфейсом. Сервер принимает операции, проверяет владельца данных и сохраняет их в PostgreSQL. Приложение отображает локальный кэш Room и обновляет его после ответа сервера.
 
-Версия **0.1.0** позволяет зарегистрироваться, создать счет, записать доход или расход и получить точный баланс. Ниже описаны запуск на компьютере, подключение телефона, API, проверки и подготовка сервера на VPS.
+Версия **0.1.0** позволяет зарегистрироваться, создать счет, записать доход или расход, выбрать основную валюту и оценить общий баланс счетов. Конвертер использует ежедневные курсы Frankfurter; исходные суммы операций сохраняются в валюте счета. Ниже описаны запуск на компьютере, подключение телефона, API, проверки и подготовка сервера на VPS.
 
 ### Навигация
 
@@ -41,14 +41,17 @@ MoneyFlow — pet-проект для учета личных финансов �
 | Несколько счетов | ✅ Название, валюта, начальный баланс |
 | Доходы и расходы | ✅ Сумма, заметка, дата |
 | Баланс счета | ✅ Начальный баланс + вся подтвержденная история |
-| KZT, USD, EUR, JPY, KWD | ✅ Точное количество дробных знаков |
+| 11 валют | ✅ KZT, USD, EUR, JPY, KWD, RUB, GBP, CHF, AUD, CAD, CNY |
+| Основная валюта пользователя | ✅ Сохраняется на сервере, по умолчанию KZT |
+| Общий баланс и конвертер | ✅ Frankfurter v2, точное округление, дата курса |
+| Недоступные / старые курсы | ✅ Ограниченный кэш и явно неполный итог |
 | Повтор после неопределенного ответа сети | ✅ Сохраненный запрос и ключ идемпотентности |
 | Просмотр загруженных данных без сети | ✅ Пока локальная сессия не истекла |
 | Разделение пользователей | ✅ Проверки сервера и отдельный локальный кэш |
 | SQL-миграции, Docker, конфигурация HTTPS | ✅ В репозитории |
 | GitHub Actions | ✅ Backend / PostgreSQL и Android build / lint / tests |
 
-**Ограничения MVP:** в приложении видны последние **50 операций** выбранного счета; API допускает limit 1–100, но курсорной пагинации нет. Баланс учитывает всю историю. Пока нет редактирования/удаления, переводов между счетами, категорий, отчетов, конвертации валют, общего баланса разных валют, подтверждения email и восстановления пароля.
+**Ограничения MVP:** в приложении видны последние **50 операций** выбранного счета; API допускает limit 1–100, но курсорной пагинации нет. Баланс учитывает всю историю. Конвертация — оценка по справочному курсу, а не перевод денег между счетами. Пока нет редактирования/удаления, переводов между счетами, категорий, отчетов, подтверждения email и восстановления пароля.
 
 Полноценная очередь офлайн-записей и WorkManager не реализованы. Можно вручную повторить один ранее сохраненный неподтвержденный запрос текущего пользователя; перед следующей операцией нужно разрешить этот запрос.
 
@@ -66,6 +69,9 @@ flowchart TD
     API --> SVC["Сервисы · auth / accounts / transactions"]
     SVC --> ORM["GORM + SQL"]
     ORM --> PG[("PostgreSQL")]
+    SVC --> FX["FX · точные коэффициенты / кэш"]
+    FX --> PG
+    FX --> FF["Frankfurter v2 · ежедневные курсы"]
     MIG["Отдельный migration runner"] --> PG
     classDef android fill:#E8F5E9,stroke:#22C55E,color:#14532D
     classDef local fill:#F3E8FF,stroke:#A855F7,color:#581C87
@@ -73,7 +79,7 @@ flowchart TD
     classDef database fill:#FEF3C7,stroke:#F59E0B,color:#78350F
     class UI,VM,R android
     class ROOM,SEC local
-    class EDGE,API,SVC,ORM,MIG backend
+    class EDGE,API,SVC,ORM,MIG,FX,FF backend
     class PG database
 ~~~
 
@@ -87,6 +93,7 @@ flowchart TD
 | Сборка | Gradle 8.11.1, AGP 8.9.2, KSP 2.1.21-2.0.1 |
 | Backend | Go 1.25+, Gin, GORM; версии в `go.mod` / `go.sum` |
 | База / инфраструктура | PostgreSQL 17.11, Docker Compose, Caddy 2.11.7 |
+| Курсы / конвертация | Frankfurter v2, USD-снимок в PostgreSQL, рациональная арифметика Go |
 | Контракт / проверки | OpenAPI 3.0.3; Go tests / vet / race, JUnit / MockWebServer, Android Lint |
 
 <a id="structure"></a>
@@ -105,6 +112,7 @@ moneyflow/
 │       ├── auth/               # Пароли и токены
 │       ├── config/             # Переменные окружения
 │       ├── database/           # Соединение PostgreSQL
+│       ├── fx/                 # Frankfurter, кэш курсов и точная конвертация
 │       ├── httpapi/            # Маршруты, middleware, валидация, тесты
 │       ├── migrations/sql/     # Версионированные SQL-файлы
 │       ├── model/              # Модели хранения
@@ -118,7 +126,7 @@ moneyflow/
 └── .env.production.example    # Production-настройки
 ~~~
 
-Источники: [Android README](android/README.md), [OpenAPI](api/openapi.yaml), [локальный Compose](infra/compose.yaml), [production Compose](infra/compose.production.yaml), [SQL-схема](backend/internal/migrations/sql/001_initial.sql).
+Источники: [Android README](android/README.md), [OpenAPI](api/openapi.yaml), [локальный Compose](infra/compose.yaml), [production Compose](infra/compose.production.yaml), [SQL-миграции](backend/internal/migrations/sql), [официальная документация Frankfurter v2](https://frankfurter.dev/).
 
 <a id="requirements"></a>
 ## 🧰 Что установить
@@ -394,6 +402,9 @@ URL обязан заканчиваться **`/`** и встраивается 
 | `DATABASE_URL` | Обязательна для Go. Native: хост `localhost`; production Compose: `db` |
 | `PORT` | Native API: по умолчанию 8080, допустимо 1–65535 |
 | `SESSION_TTL` | По умолчанию `720h` (30 дней), допустимо `1m`–`2160h`. Production-шаблон: `168h` |
+| `FRANKFURTER_URL` | `https://api.frankfurter.dev/v2`; HTTPS URL без userinfo/query/fragment. HTTP разрешен только для localhost / loopback fixtures |
+| `FX_CACHE_TTL` | Свежесть снимка: по умолчанию `6h`, допустимо `1m`–`24h` |
+| `FX_MAX_STALE` | Предельный возраст fallback-данных: по умолчанию `168h` (7 дней), допустимо `1h`–`720h`, не меньше `FX_CACHE_TTL` |
 | `APP_ENV` | `development` / `test` / `production`; пустое допустимо для development |
 | `TRUSTED_PROXIES` | IP/CIDR через запятую; по умолчанию доверенных прокси нет |
 | `GIN_MODE` | В Compose — `release` |
@@ -425,6 +436,11 @@ URL обязан заканчиваться **`/`** и встраивается 
 | POST | `/api/v1/accounts` | Bearer | 201, счет |
 | GET | `/api/v1/transactions?account_id=UUID&limit=50` | Bearer | 200, `{"transactions":[...]}` |
 | POST | `/api/v1/transactions` | Bearer + `Idempotency-Key` | 201, новая / повторно полученная операция |
+| GET | `/api/v1/currencies` | Bearer | 200, каталог 11 валют |
+| GET / PUT | `/api/v1/preferences` | Bearer | 200, `{"base_currency":"KZT"}` |
+| GET | `/api/v1/exchange-rates?base=USD` | Bearer | 200, доступные курсы и список отсутствующих |
+| POST | `/api/v1/convert` | Bearer | 200, предварительная конвертация без записи операции |
+| GET | `/api/v1/portfolio?base=KZT` | Bearer | 200, общий / явно неполный баланс |
 
 JSON требует `Content-Type: application/json`. Тело — один объект до **16 KiB**, неизвестные поля отклоняются. Время — RFC3339 с часовым поясом.
 
@@ -433,10 +449,10 @@ JSON требует `Content-Type: application/json`. Тело — один об
 | 400 | Некорректный JSON, поля, UUID, сумма, дата или limit |
 | 401 | Пароль/токен неверен, сессия отсутствует, истекла или отозвана |
 | 404 / 405 | Ресурс отсутствует/чужой или маршрут не существует / неверный метод |
-| 409 | Email занят, конфликт ключа идемпотентности или переполнение баланса |
+| 409 | Email занят, конфликт ключа идемпотентности, переполнение баланса / конвертации (`conversion_overflow`) |
 | 413 / 415 | Слишком большое тело / неверный Content-Type |
 | 429 | Лимит auth-запросов; учитывайте `Retry-After` |
-| 500 / 503 / 504 | Ошибка сервера / база недоступна на readiness / deadline запроса |
+| 500 / 503 / 504 | Ошибка сервера / база недоступна на readiness или `rates_unavailable` при конвертации / deadline запроса |
 
 Формат: `{"error":{"code":"invalid_request","message":"Human-readable explanation."}}`.
 
@@ -484,6 +500,16 @@ $taskAccounts = Send-MoneyFlow GET '/api/v1/accounts' -Headers $taskAuth
 $taskBalance = ($taskAccounts.accounts | Where-Object id -eq $taskAccount.id).balance_minor
 if ($taskBalance -ne '498701') { throw "Unexpected balance: $taskBalance" }
 Send-MoneyFlow GET "/api/v1/transactions?account_id=$($taskAccount.id)&limit=50" -Headers $taskAuth
+# Основная валюта сохраняется для этого пользователя.
+Send-MoneyFlow PUT '/api/v1/preferences' @{ base_currency = 'KZT' } $taskAuth
+Send-MoneyFlow GET '/api/v1/currencies' -Headers $taskAuth
+Send-MoneyFlow GET '/api/v1/exchange-rates?base=USD' -Headers $taskAuth
+# 100.00 USD -> KZT: это расчет, финансовая операция не создается.
+Send-MoneyFlow POST '/api/v1/convert' @{
+    from_currency = 'USD'; to_currency = 'KZT'; amount_minor = '10000'
+} $taskAuth
+# Без base используется сохраненная основная валюта.
+Send-MoneyFlow GET '/api/v1/portfolio' -Headers $taskAuth
 Send-MoneyFlow POST '/api/v1/auth/logout' -Headers $taskAuth
 "PASS: один расход, баланс 4987.01 KZT, сессия отозвана. Пользователь: $taskEmail"
 ~~~
@@ -496,7 +522,17 @@ Send-MoneyFlow POST '/api/v1/auth/logout' -Headers $taskAuth
 curl --fail http://localhost:8080/readyz
 curl --fail http://localhost:8080/api/v1/accounts \
   -H "Authorization: Bearer $MONEYFLOW_TOKEN"
+curl --fail 'http://localhost:8080/api/v1/portfolio?base=KZT' \
+  -H "Authorization: Bearer $MONEYFLOW_TOKEN"
 ~~~
+
+### 🌍 Курсы и общий баланс
+
+`GET /currencies` возвращает `{provider,currencies}` с кодом, английским названием, символом и `fraction_digits`. `GET /preferences` и `PUT /preferences` читают / сохраняют `base_currency` текущего пользователя. Все эти пути имеют префикс `/api/v1` и требуют Bearer-токен. Необязательный query `base` в курсах и портфеле переопределяет валюту только для этого ответа; сохраненная настройка не меняется.
+
+`POST /convert` принимает `from_currency`, `to_currency`, `amount_minor` — каноническую строку со знаком, модуль ≤ 10^15 минимальных единиц. Ответ содержит исходные поля, `converted_amount_minor`, `rate`, `rate_date`, `fetched_at`, `stale`, `provider`. Одинаковая валюта дает rate `"1"`, даты `null`, `stale=false` и работает без внешнего провайдера. Неподдерживаемая валюта / некорректная сумма — 400; недоступный курс — 503 `rates_unavailable`; переполнение signed int64 — 409 `conversion_overflow`.
+
+`GET /portfolio` возвращает исходный и пересчитанный баланс каждого счета. **`complete=true`** разрешает показывать `total_balance_minor` как общий итог. Если курс хотя бы одной нужной валюты отсутствует, ответ остается 200, но **`complete=false`, `total_balance_minor=null`**. `partial_balance_minor` — сумма только доступных оценок, `missing_currencies` объясняет пропуски; это не полный баланс. На счетах без курса `converted_balance_minor`, `rate` и `rate_date` равны `null`. Переполнение отдельной оценки или суммы также возвращает 409.
 
 <a id="data-rules"></a>
 ## 🧮 Деньги, безопасность и офлайн
@@ -507,7 +543,7 @@ API передает деньги **строками целых чисел в м
 
 | Валюта | Дробных знаков | Сумма UI | `amount_minor` |
 |---|---:|---:|---|
-| KZT / USD / EUR | 2 | 12,99 | `"1299"` |
+| KZT / USD / EUR / RUB / GBP / CHF / AUD / CAD / CNY | 2 | 12,99 | `"1299"` |
 | JPY | 0 | 1299 | `"1299"` |
 | KWD | 3 | 1,299 | `"1299"` |
 
@@ -517,6 +553,14 @@ API передает деньги **строками целых чисел в м
 - Баланс = `начальный + доходы − расходы`, диапазон signed int64. Переполняющая запись отклоняется атомарно с 409.
 - Название счета: 1–100 Unicode-символов после trim; заметка: до 500 символов.
 - Валюта берется из счета; `user_id` от клиента для выбора владельца не принимается.
+
+### Frankfurter и точность оценки
+
+Используется [Frankfurter v2](https://frankfurter.dev/) с ежедневными справочными курсами нескольких официальных источников. API-key не нужен. Это оценка по публикуемым курсам, а не банковский bid/ask, гарантированный курс обмена или котировка для торгов в реальном времени. Приложение предлагает 11 валют из более широкого каталога провайдера; KZT поддерживается v2.
+
+Сервер запрашивает только список валют и USD-базу (`/v2/rates?base=USD&quotes=...`); имена пользователей, токены, счета, суммы и заметки провайдеру не передаются. Коэффициенты сохраняются десятичными строками в PostgreSQL, а конвертация выполняется точной рациональной арифметикой. Результат округляется до минимальной единицы целевой валюты по **half-even**: при точной половине выбирается четное число. Для общего итога сначала округляется каждый счет, затем складываются полученные минимальные единицы. Поле `rate` удобно для отображения; повторный расчет по его ограниченной десятичной записи может отличаться от точного внутреннего расчета.
+
+USD-снимок общий для пользователей и переживает перезапуск сервера. По умолчанию он свежий **6 часов**; после этого следующему запросу нужна попытка обновления. При недоступном провайдере допускается ограниченный fallback до **7 дней**, отмеченный `stale=true`; слишком старые / отсутствующие валюты не подменяются нулем или курсом 1. Возраст проверяется и для снимка, и для опубликованной даты курса. `rate_date` — дата наблюдения провайдера (для кросс-курса — более ранняя из двух дат), `fetched_at` — время загрузки снимка; это разные значения. Выходные и праздники могут давать дату предыдущего рабочего дня. Конвертация не меняет валюту счета, исходные записи или их исторические суммы.
 
 ### Сессии и безопасный повтор
 
@@ -582,7 +626,7 @@ go test -race -count=1 ./...
 </details>
 
 <details>
-<summary><b>Android: сборка, 14 unit/contract tests, lint</b></summary>
+<summary><b>Android: сборка, unit/contract tests, lint</b></summary>
 
 Из `android/`:
 
@@ -608,6 +652,8 @@ bash ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ## 🧱 Миграции и локальное обновление
 
 [SQL-миграции](backend/internal/migrations/sql) встраиваются в бинарник и применяются отдельным runner с блокировкой PostgreSQL и SHA-256 checksum. Примененные файлы не меняйте: добавляйте новый файл с очередным номером. API не выполняет `AutoMigrate`; down-миграций нет.
+
+Обновление мультивалютности добавляет [**`002_multicurrency.sql`**](backend/internal/migrations/sql/002_multicurrency.sql): расширенный список валют, предпочтение основной валюты и persistent-кэш курсов. Уже примененная `001_initial.sql` остается неизменной. Для существующей базы обязательно запустите новый runner перед новым API; удалять базу / volume для обновления не нужно. Для native Go: `go run ./cmd/migrate` из `backend/` с настроенным `DATABASE_URL`.
 
 После изменения Go/SQL, из корня проекта:
 
@@ -645,6 +691,9 @@ POSTGRES_PASSWORD=REPLACE_WITH_LONG_RANDOM_URL_SAFE_PASSWORD
 DATABASE_URL=postgres://moneyflow:REPLACE_WITH_LONG_RANDOM_URL_SAFE_PASSWORD@db:5432/moneyflow?sslmode=disable
 PORT=8080
 SESSION_TTL=168h
+FRANKFURTER_URL=https://api.frankfurter.dev/v2
+FX_CACHE_TTL=6h
+FX_MAX_STALE=168h
 DOMAIN=api.your-domain.com
 ACME_EMAIL=you@your-domain.com
 ~~~
@@ -666,6 +715,8 @@ curl --fail https://api.your-domain.com/readyz
 ~~~
 
 Caddy получает сертификат и проксирует API. Проверьте DNS, включая AAAA, если она есть. `sslmode=disable` относится к PostgreSQL в приватной Compose-сети; Android использует HTTPS.
+
+Для получения курсов API подключен также к исходящей `egress`-сети без публикации порта. PostgreSQL остается только в приватной сети, публичный HTTP/HTTPS принимает Caddy. VPS должен разрешать DNS и исходящий HTTPS к `api.frankfurter.dev`; без этого остаются только допустимые cached-курсы / явно неполный портфель. `/readyz` проверяет PostgreSQL и не проверяет доступность Frankfurter.
 
 API доверяет forwarded-заголовкам только от фиксированного IP Caddy. При конфликте `172.30.50.0/24` добавьте согласованные `PRIVATE_NETWORK_SUBNET` и `CADDY_PRIVATE_IP`: IP должен принадлежать подсети.
 
@@ -787,6 +838,9 @@ docker compose --env-file .env.production -f infra/compose.production.yaml up -d
 | HTTP не работает в release | Нужен HTTPS, действующий домен/сертификат |
 | 401 после перерыва | Сессия истекла; войдите снова |
 | 409 при повторе | Исходный payload и key должны быть теми же |
+| `rates_unavailable` / неполный общий итог | Проверьте сеть сервера, `FRANKFURTER_URL`, даты и `missing_currencies`; не считайте partial полным итогом |
+| `stale=true` у курса | Показана ограниченная cached-оценка; проверьте `rate_date` / `fetched_at` и доступность провайдера |
+| После обновления нет FX-таблиц | Пересоберите runner и примените миграцию `002` перед API |
 | Новая операция блокируется pending | Разрешите сохраненный запрос ручным повтором |
 | CI APK не видит API с телефона | Он собран для эмулятора; нужен APK с USB/LAN/HTTPS URL |
 | Checksum миграции не совпадает | Верните примененный файл, добавьте новую миграцию |
@@ -797,6 +851,7 @@ docker compose --env-file .env.production -f infra/compose.production.yaml up -d
 - [x] Android MVP и серверная запись операций.
 - [x] Точные деньги, изоляция пользователей и повтор без дублей.
 - [x] Кэш, SQL-миграции, CI и Docker/HTTPS основа.
+- [x] 11 валют, Frankfurter v2, конвертер и общий баланс в выбранной валюте.
 - [ ] Публичный deploy, мониторинг, автоматические зашифрованные backup.
 - [ ] Signed APK/AAB и публикация.
 - [ ] Подтверждение email и восстановление пароля.

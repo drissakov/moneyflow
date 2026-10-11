@@ -6,12 +6,18 @@ import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.Locale
 
-enum class SupportedCurrency(val code: String, val scale: Int, val symbol: String) {
-    KZT("KZT", 2, "₸"),
-    USD("USD", 2, "$"),
-    EUR("EUR", 2, "€"),
-    JPY("JPY", 0, "¥"),
-    KWD("KWD", 3, "KWD");
+enum class SupportedCurrency(val code: String, val scale: Int, val symbol: String, val title: String) {
+    KZT("KZT", 2, "₸", "Казахстанский тенге"),
+    USD("USD", 2, "$", "Доллар США"),
+    EUR("EUR", 2, "€", "Евро"),
+    JPY("JPY", 0, "¥", "Японская иена"),
+    KWD("KWD", 3, "KWD", "Кувейтский динар"),
+    RUB("RUB", 2, "₽", "Российский рубль"),
+    GBP("GBP", 2, "£", "Фунт стерлингов"),
+    CHF("CHF", 2, "CHF", "Швейцарский франк"),
+    AUD("AUD", 2, "AUD", "Австралийский доллар"),
+    CAD("CAD", 2, "CAD", "Канадский доллар"),
+    CNY("CNY", 2, "CNY", "Китайский юань");
 
     companion object {
         fun fromCode(code: String): SupportedCurrency = entries.firstOrNull { it.code == code }
@@ -37,6 +43,11 @@ object Money {
     }
 
     fun format(minor: Long, code: String): String {
+        return format(minor.toString(), code)
+    }
+
+    fun format(minor: String, code: String): String {
+        require(minor.matches(Regex("0|-?[1-9]\\d*"))) { "Некорректная сумма" }
         val currency = SupportedCurrency.fromCode(code)
         val symbols = DecimalFormatSymbols(Locale.forLanguageTag("ru-RU"))
         val formatter = DecimalFormat().apply {
@@ -46,6 +57,6 @@ object Money {
             isGroupingUsed = true
             groupingSize = 3
         }
-        return "${formatter.format(BigDecimal.valueOf(minor, currency.scale))} ${currency.symbol}"
+        return "${formatter.format(BigDecimal(minor).movePointLeft(currency.scale))} ${currency.symbol}"
     }
 }

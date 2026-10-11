@@ -8,6 +8,8 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.moneyflow.app.data.domain.Account
 import com.moneyflow.app.data.domain.MoneyTransaction
 import kotlinx.coroutines.flow.Flow
@@ -52,8 +54,40 @@ data class TransactionEntity(
     }
 }
 
+@Entity(tableName = "fx_preferences", primaryKeys = ["userId"])
+data class FxPreferencesEntity(val userId: String, val baseCurrency: String, val pendingSync: Boolean)
+
+@Entity(tableName = "portfolio_snapshots", primaryKeys = ["userId", "baseCurrency"])
+data class PortfolioSnapshotEntity(
+    val userId: String,
+    val baseCurrency: String,
+    val payload: String,
+    val receivedAt: String,
+)
+
 @Dao
 interface MoneyFlowDao {
+    @Query("SELECT * FROM fx_preferences WHERE userId = :userId LIMIT 1")
+    fun observePreferences(userId: String): Flow<FxPreferencesEntity?>
+
+    @Query("SELECT * FROM fx_preferences WHERE userId = :userId LIMIT 1")
+    suspend fun preferences(userId: String): FxPreferencesEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putPreferences(preferences: FxPreferencesEntity)
+
+    @Query("SELECT * FROM portfolio_snapshots WHERE userId = :userId AND baseCurrency = :base LIMIT 1")
+    fun observePortfolio(userId: String, base: String): Flow<PortfolioSnapshotEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putPortfolio(snapshot: PortfolioSnapshotEntity)
+
+    @Query("DELETE FROM portfolio_snapshots WHERE userId = :userId")
+    suspend fun deletePortfolios(userId: String)
+
+    @Query("DELETE FROM fx_preferences WHERE userId = :userId")
+    suspend fun deletePreferences(userId: String)
+
     @Query("SELECT * FROM accounts WHERE userId = :userId ORDER BY createdAt ASC, id ASC")
     fun observeAccounts(userId: String): Flow<List<AccountEntity>>
 
@@ -76,7 +110,17 @@ interface MoneyFlowDao {
     suspend fun deleteUserTransactions(userId: String)
 }
 
-@Database(entities = [AccountEntity::class, TransactionEntity::class], version = 1, exportSchema = true)
+@Database(entities = [AccountEntity::class, TransactionEntity::class, FxPreferencesEntity::class,
+    PortfolioSnapshotEntity::class], version = 2, exportSchema = true)
 abstract class MoneyFlowDatabase : RoomDatabase() {
     abstract fun dao(): MoneyFlowDao
+
+    companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `fx_preferences` (`userId` TEXT NOT NULL, `baseCurrency` TEXT NOT NULL, `pendingSync` INTEGER NOT NULL, PRIMARY KEY(`userId`))")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `portfolio_snapshots` (`userId` TEXT NOT NULL, `baseCurrency` TEXT NOT NULL, `payload` TEXT NOT NULL, `receivedAt` TEXT NOT NULL, PRIMARY KEY(`userId`, `baseCurrency`))")
+            }
+        }
+    }
 }

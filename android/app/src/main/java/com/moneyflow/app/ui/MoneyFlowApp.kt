@@ -1,7 +1,6 @@
 package com.moneyflow.app.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +24,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Refresh
@@ -135,7 +133,9 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
             when {
                 state.starting -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 state.session == null -> AuthScreen(state, viewModel)
-                else -> Dashboard(state, viewModel, onAddAccount = { viewModel.clearMessages(); dialog = "account" })
+                else -> Dashboard(state, viewModel,
+                    onAddAccount = { viewModel.clearMessages(); dialog = "account" },
+                    onConverter = { viewModel.clearConversion(); dialog = "convert" })
             }
         }
     }
@@ -143,6 +143,7 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
     when (dialog) {
         "account" -> AccountDialog(state, viewModel) { dialog = null }
         "transaction" -> state.selectedAccount?.let { account -> TransactionDialog(account, state, viewModel) { dialog = null } }
+        "convert" -> ConverterDialog(state, viewModel) { dialog = null }
         "logout" -> AlertDialog(
             onDismissRequest = { dialog = null },
             title = { Text("Выйти из аккаунта?") },
@@ -217,7 +218,7 @@ private fun AuthScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel) {
 }
 
 @Composable
-private fun Dashboard(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, onAddAccount: () -> Unit) {
+private fun Dashboard(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, onAddAccount: () -> Unit, onConverter: () -> Unit) {
     LazyColumn(
         modifier = Modifier.widthIn(max = 620.dp).fillMaxSize().testTag("dashboard"),
         contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 12.dp, bottom = 100.dp),
@@ -235,7 +236,8 @@ private fun Dashboard(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, on
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        item { BalanceCard(state.selectedAccount, state.lastSyncedAt, state.refreshing) }
+        item { PortfolioCard(state, viewModel, onConverter) }
+        if (state.selectedAccount != null) item { BalanceCard(state.selectedAccount, state.lastSyncedAt, state.refreshing) }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -249,20 +251,9 @@ private fun Dashboard(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, on
                 }
                 if (state.accounts.isEmpty()) {
                     EmptyCard("Начните с первого счёта", "Например, «Основная карта» или «Наличные». Выберите валюту и начальный остаток.")
-                } else Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     state.accounts.forEach { account ->
-                        FilterChip(
-                            selected = account.id == state.selectedAccountId,
-                            onClick = { viewModel.selectAccount(account.id) },
-                            label = { Column(Modifier.padding(vertical = 5.dp)) {
-                                Text(account.name, fontWeight = FontWeight.SemiBold, maxLines = 1)
-                                Text(Money.format(account.balanceMinor, account.currency), style = MaterialTheme.typography.labelSmall)
-                            } },
-                            leadingIcon = if (account.id == state.selectedAccountId) {
-                                { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                            } else null,
-                            modifier = Modifier.testTag("account_${account.id}"),
-                        )
+                        FxAccountCard(account, state) { viewModel.selectAccount(account.id) }
                     }
                 }
             }
@@ -389,15 +380,14 @@ private fun AccountDialog(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel
                 Text("Отдельный счёт для карты, наличных или сбережений.", style = MaterialTheme.typography.bodyMedium)
                 OutlinedTextField(name, { name = it }, label = { Text("Название счёта") }, singleLine = true,
                     enabled = !state.working, modifier = Modifier.fillMaxWidth().testTag("account_name"))
-                Text("Валюта", style = MaterialTheme.typography.labelLarge)
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    SupportedCurrency.entries.forEach { option ->
-                        FilterChip(selected = option == currency, onClick = { currency = option },
-                            label = { Text(option.code) }, enabled = !state.working, modifier = Modifier.testTag("currency_${option.code}"))
-                    }
-                }
+                CurrencySelector("Валюта счёта · 11 валют", currency, { currency = it },
+                    modifier = Modifier.fillMaxWidth().testTag("account_currency"), enabled = !state.working)
                 OutlinedTextField(opening, { opening = it }, label = { Text("Начальный остаток") },
                     suffix = { Text(currency.code) }, singleLine = true,
+                    trailingIcon = { TextButton(onClick = {
+                        val value = opening.trim()
+                        opening = if (value.startsWith("-")) value.drop(1) else "-$value"
+                    }, enabled = !state.working) { Text("±") } },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     supportingText = { Text("${currency.scale} знаков после запятой; может быть отрицательным") },
                     enabled = !state.working, modifier = Modifier.fillMaxWidth().testTag("account_opening"))

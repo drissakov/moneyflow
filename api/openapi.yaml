@@ -8,14 +8,22 @@ info:
     a user ID to choose another owner. Ownership failures return 404.
 
     Money travels as canonical base-10 integer strings in minor units to avoid
-    floating-point rounding. USD, EUR, and KZT have two minor-unit decimal places;
-    JPY has zero and KWD has three. Individual amounts and opening balances are
+    floating-point rounding. Supported currencies are KZT, USD, EUR, JPY, KWD,
+    RUB, GBP, CHF, AUD, CAD, and CNY. JPY has zero minor-unit decimal places,
+    KWD has three, and the other supported currencies have two. Individual amounts and opening balances are
     limited to 1,000,000,000,000,000 minor units. Calculated balances use signed
     64-bit integers. Writes that would overflow a balance are rejected atomically.
 
     Requests contain one JSON object, reject unknown fields, and have a 16 KiB
     body limit. RFC3339 timestamps include a timezone. Authentication tokens are
     opaque bearer credentials with an expiry; logout revokes the current token.
+
+    Frankfurter v2 supplies daily reference rates, cached persistently in
+    PostgreSQL using USD anchors. Converted views never alter original ledger
+    amounts. Conversion uses exact rational arithmetic and rounds to target
+    minor units with round-half-to-even. Missing rates produce an explicitly
+    incomplete portfolio, never a fabricated total. Provider rate dates and
+    snapshot fetch time are distinct; identity conversions need no provider.
 servers:
   - url: http://localhost:8080
     description: Local development; Android emulator uses http://10.0.2.2:8080
@@ -26,6 +34,9 @@ tags:
   - name: Authentication
   - name: Accounts
   - name: Transactions
+  - name: Currencies
+  - name: Preferences
+  - name: Portfolio
 security:
   - bearerAuth: []
 paths:
@@ -310,7 +321,185 @@ paths:
           $ref: '#/components/responses/InternalError'
         '504':
           $ref: '#/components/responses/RequestTimeout'
+  /api/v1/currencies:
+    get:
+      tags: [Currencies]
+      operationId: listCurrencies
+      summary: List the supported currency catalog
+      responses:
+        '200':
+          description: Curated application catalog; does not query the provider.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrencyCatalog'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/preferences:
+    get:
+      tags: [Preferences]
+      operationId: getPreferences
+      summary: Read the authenticated user's base currency
+      responses:
+        '200':
+          description: KZT is the default for new and existing users without a saved preference.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preferences'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+    put:
+      tags: [Preferences]
+      operationId: updatePreferences
+      summary: Save the authenticated user's portfolio base currency
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Preferences'
+            example:
+              base_currency: KZT
+      responses:
+        '200':
+          description: Saved preference; account currencies and original ledger amounts are unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preferences'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/exchange-rates:
+    get:
+      tags: [Currencies]
+      operationId: getExchangeRates
+      summary: Read available rates from a base currency
+      description: |
+        Rates express quote major units per one base major unit. A usable
+        cached snapshot is returned with stale=true when refreshing fails.
+        Missing or too old quotes are listed in missing_currencies; a provider
+        outage still returns 200 with the available rates, including identity.
+        Cross rates use USD anchors; rate_date is the older anchor date.
+      parameters:
+        - $ref: '#/components/parameters/BaseCurrency'
+      responses:
+        '200':
+          description: Available rates and explicit missing currencies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExchangeRates'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/convert:
+    post:
+      tags: [Currencies]
+      operationId: convertAmount
+      summary: Preview a conversion without creating a ledger transaction
+      description: |
+        Accepts canonical signed minor units with absolute value at most 10^15.
+        Exact rational conversion rounds to the target currency's minor units
+        using round-half-to-even. Converted output must fit signed int64.
+        Identity conversions return rate='1', null dates/fetched_at, stale=false.
+        An unavailable non-identity rate returns 503; no invented rate is used.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversionRequest'
+            example:
+              from_currency: USD
+              to_currency: KZT
+              amount_minor: '10000'
+      responses:
+        '200':
+          description: Conversion preview; no financial records are written.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConversionOverflow'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          $ref: '#/components/responses/RatesUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/portfolio:
+    get:
+      tags: [Portfolio]
+      operationId: getPortfolio
+      summary: Value the authenticated user's account balances in one base currency
+      description: |
+        Defaults to the saved user preference, initially KZT. Original balance
+        amounts remain in each account's currency. Each converted account is
+        rounded to target minor units before summing. Missing rates return 200,
+        complete=false and total_balance_minor=null; partial_balance_minor is
+        the sum of accounts with available rates. Signed int64 overflow returns
+        409 conversion_overflow. An empty portfolio is complete with total '0'.
+      parameters:
+        - $ref: '#/components/parameters/BaseCurrency'
+      responses:
+        '200':
+          description: Complete total or explicitly incomplete valuation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Portfolio'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/ConversionOverflow'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
 components:
+  parameters:
+    BaseCurrency:
+      name: base
+      in: query
+      required: false
+      description: Base currency. If omitted, uses the authenticated user's preference (initially KZT).
+      schema:
+        $ref: '#/components/schemas/Currency'
   securitySchemes:
     bearerAuth:
       type: http
@@ -325,6 +514,18 @@ components:
           schema:
             $ref: '#/components/schemas/Credentials'
   responses:
+    RatesUnavailable:
+      description: No usable rate is available for this conversion; error.code is rates_unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ConversionOverflow:
+      description: Converted amount or portfolio sum cannot fit signed int64; error.code is conversion_overflow.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     SessionCreated:
       description: New authenticated session.
       content:
@@ -434,7 +635,189 @@ components:
           $ref: '#/components/schemas/User'
     Currency:
       type: string
-      enum: [USD, EUR, KZT, JPY, KWD]
+      enum: [KZT, USD, EUR, JPY, KWD, RUB, GBP, CHF, AUD, CAD, CNY]
+    CurrencyMetadata:
+      type: object
+      additionalProperties: false
+      required: [code, name, symbol, fraction_digits]
+      properties:
+        code:
+          $ref: '#/components/schemas/Currency'
+        name:
+          type: string
+          description: English currency name.
+          example: Kazakhstani Tenge
+        symbol:
+          type: string
+          example: ₸
+        fraction_digits:
+          type: integer
+          enum: [0, 2, 3]
+    CurrencyCatalog:
+      type: object
+      additionalProperties: false
+      required: [provider, currencies]
+      properties:
+        provider:
+          type: string
+          enum: [Frankfurter]
+        currencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/CurrencyMetadata'
+    Preferences:
+      type: object
+      additionalProperties: false
+      required: [base_currency]
+      properties:
+        base_currency:
+          $ref: '#/components/schemas/Currency'
+    Rate:
+      type: string
+      pattern: '^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$'
+      description: Positive decimal string without an exponent; quote major units per base major unit. Display precision can differ from exact internal rational conversion.
+      example: '491.275'
+    RateDate:
+      type: string
+      format: date
+      nullable: true
+      description: Provider observation date; cross rates use the older of both USD-anchor dates. Null for identity or unavailable rates.
+    SnapshotFetchedAt:
+      type: string
+      format: date-time
+      nullable: true
+      description: Fetch time of the snapshot within the cache age limit, distinct from its observation dates. Individual old quotes can still be unavailable. Null when no usable-age snapshot exists or a conversion/portfolio needs only identity rates.
+    ExchangeRate:
+      type: object
+      additionalProperties: false
+      required: [quote_currency, rate, rate_date]
+      properties:
+        quote_currency:
+          $ref: '#/components/schemas/Currency'
+        rate:
+          $ref: '#/components/schemas/Rate'
+        rate_date:
+          $ref: '#/components/schemas/RateDate'
+    ExchangeRates:
+      type: object
+      additionalProperties: false
+      required: [base_currency, provider, fetched_at, stale, rates, missing_currencies]
+      properties:
+        base_currency:
+          $ref: '#/components/schemas/Currency'
+        provider:
+          type: string
+          enum: [Frankfurter]
+        fetched_at:
+          $ref: '#/components/schemas/SnapshotFetchedAt'
+        stale:
+          type: boolean
+          description: The usable snapshot is older than FX_CACHE_TTL. Provider observation dates remain independently visible and are excluded when older than FX_MAX_STALE.
+        rates:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExchangeRate'
+        missing_currencies:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Currency'
+    ConversionRequest:
+      type: object
+      additionalProperties: false
+      required: [from_currency, to_currency, amount_minor]
+      properties:
+        from_currency:
+          $ref: '#/components/schemas/Currency'
+        to_currency:
+          $ref: '#/components/schemas/Currency'
+        amount_minor:
+          $ref: '#/components/schemas/OpeningMinorBalance'
+    Conversion:
+      type: object
+      additionalProperties: false
+      required: [from_currency, to_currency, amount_minor, converted_amount_minor, rate, rate_date, fetched_at, stale, provider]
+      properties:
+        from_currency:
+          $ref: '#/components/schemas/Currency'
+        to_currency:
+          $ref: '#/components/schemas/Currency'
+        amount_minor:
+          $ref: '#/components/schemas/OpeningMinorBalance'
+        converted_amount_minor:
+          $ref: '#/components/schemas/CalculatedMinorBalance'
+        rate:
+          $ref: '#/components/schemas/Rate'
+        rate_date:
+          $ref: '#/components/schemas/RateDate'
+        fetched_at:
+          $ref: '#/components/schemas/SnapshotFetchedAt'
+        stale:
+          type: boolean
+        provider:
+          type: string
+          enum: [Frankfurter]
+    PortfolioAccount:
+      type: object
+      additionalProperties: false
+      required: [id, name, currency, balance_minor, converted_balance_minor, rate, rate_date]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        currency:
+          $ref: '#/components/schemas/Currency'
+        balance_minor:
+          $ref: '#/components/schemas/CalculatedMinorBalance'
+        converted_balance_minor:
+          type: string
+          nullable: true
+          pattern: '^(?:0|-?[1-9][0-9]{0,18})$'
+          maxLength: 20
+          description: Signed int64 minor units of the portfolio base currency; null if the rate is unavailable.
+        rate:
+          type: string
+          nullable: true
+          pattern: '^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$'
+          description: Base major units per original account major unit; null if unavailable.
+        rate_date:
+          $ref: '#/components/schemas/RateDate'
+    Portfolio:
+      type: object
+      additionalProperties: false
+      required: [base_currency, provider, fetched_at, stale, complete, total_balance_minor, partial_balance_minor, missing_currencies, accounts]
+      properties:
+        base_currency:
+          $ref: '#/components/schemas/Currency'
+        provider:
+          type: string
+          enum: [Frankfurter]
+        fetched_at:
+          $ref: '#/components/schemas/SnapshotFetchedAt'
+        stale:
+          type: boolean
+        complete:
+          type: boolean
+          description: True only when every account has an available conversion.
+        total_balance_minor:
+          type: string
+          nullable: true
+          pattern: '^(?:0|-?[1-9][0-9]{0,18})$'
+          maxLength: 20
+          description: Total in base minor units; null whenever complete=false.
+        partial_balance_minor:
+          $ref: '#/components/schemas/CalculatedMinorBalance'
+        missing_currencies:
+          type: array
+          uniqueItems: true
+          items:
+            $ref: '#/components/schemas/Currency'
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/PortfolioAccount'
     PositiveMinorAmount:
       type: string
       pattern: '^(?:[1-9][0-9]{0,14}|1000000000000000)$'

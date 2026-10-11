@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/drissakov/moneyflow/backend/internal/fx"
 )
 
 type Config struct {
@@ -15,10 +17,39 @@ type Config struct {
 	SessionTTL     time.Duration
 	Production     bool
 	TrustedProxies []string
+	FrankfurterURL string
+	FXCacheTTL     time.Duration
+	FXMaxStale     time.Duration
 }
 
 func Load() (Config, error) {
 	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), Port: os.Getenv("PORT"), SessionTTL: 30 * 24 * time.Hour}
+	c.FrankfurterURL = os.Getenv("FRANKFURTER_URL")
+	if c.FrankfurterURL == "" {
+		c.FrankfurterURL = "https://api.frankfurter.dev/v2"
+	}
+	if err := fx.ValidateURL(c.FrankfurterURL); err != nil {
+		return c, err
+	}
+	c.FXCacheTTL = 6 * time.Hour
+	c.FXMaxStale = 7 * 24 * time.Hour
+	if raw := os.Getenv("FX_CACHE_TTL"); raw != "" {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value < time.Minute || value > 24*time.Hour {
+			return c, fmt.Errorf("FX_CACHE_TTL must be between 1m and 24h")
+		}
+		c.FXCacheTTL = value
+	}
+	if raw := os.Getenv("FX_MAX_STALE"); raw != "" {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value < time.Hour || value > 30*24*time.Hour {
+			return c, fmt.Errorf("FX_MAX_STALE must be between 1h and 720h")
+		}
+		c.FXMaxStale = value
+	}
+	if c.FXMaxStale < c.FXCacheTTL {
+		return c, fmt.Errorf("FX_MAX_STALE must be at least FX_CACHE_TTL")
+	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("DATABASE_URL is required")
 	}

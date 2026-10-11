@@ -12,6 +12,7 @@ import (
 
 	"github.com/drissakov/moneyflow/backend/internal/config"
 	"github.com/drissakov/moneyflow/backend/internal/database"
+	"github.com/drissakov/moneyflow/backend/internal/fx"
 	"github.com/drissakov/moneyflow/backend/internal/httpapi"
 	"github.com/drissakov/moneyflow/backend/internal/service"
 	"github.com/gin-gonic/gin"
@@ -42,7 +43,11 @@ func run(logger *slog.Logger) error {
 		return errors.New("database handle unavailable")
 	}
 	defer sqlDB.Close()
-	s, err := service.New(db, cfg.SessionTTL)
+	provider, err := fx.NewFrankfurter(cfg.FrankfurterURL)
+	if err != nil {
+		return errors.New("invalid exchange rate provider configuration")
+	}
+	s, err := service.New(db, cfg.SessionTTL, service.Options{FXProvider: provider, FXCacheTTL: cfg.FXCacheTTL, FXMaxStale: cfg.FXMaxStale})
 	if err != nil {
 		return errors.New("authentication initialization failed")
 	}

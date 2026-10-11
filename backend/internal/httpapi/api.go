@@ -59,6 +59,12 @@ func New(s *service.Service, opts Options) (*gin.Engine, error) {
 	private.POST("/accounts", a.createAccount)
 	private.GET("/transactions", a.transactions)
 	private.POST("/transactions", a.createTransaction)
+	private.GET("/currencies", a.currencies)
+	private.GET("/preferences", a.preferences)
+	private.PUT("/preferences", a.setPreferences)
+	private.GET("/exchange-rates", a.exchangeRates)
+	private.POST("/convert", a.convert)
+	private.GET("/portfolio", a.portfolio)
 	return router, nil
 }
 

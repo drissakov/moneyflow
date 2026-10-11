@@ -9,7 +9,8 @@ import com.moneyflow.app.data.remote.ApiFactory
 
 class MoneyFlowApplication : Application() {
     val repository: MoneyFlowRepository by lazy {
-        val database = Room.databaseBuilder(this, MoneyFlowDatabase::class.java, "moneyflow.db").build()
+        val database = Room.databaseBuilder(this, MoneyFlowDatabase::class.java, "moneyflow.db")
+            .addMigrations(MoneyFlowDatabase.MIGRATION_1_2).build()
         MoneyFlowRepository(database, SessionStore(this)) { token ->
             ApiFactory.create(BuildConfig.API_BASE_URL, token)
         }

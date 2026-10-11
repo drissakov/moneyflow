@@ -7,6 +7,7 @@ import com.google.gson.Gson
 import com.moneyflow.app.data.MoneyFlowRepository
 import com.moneyflow.app.data.PendingTransaction
 import com.moneyflow.app.data.Session
+import com.moneyflow.app.data.CachedPortfolio
 import com.moneyflow.app.data.domain.Account
 import com.moneyflow.app.data.domain.Money
 import com.moneyflow.app.data.domain.MoneyTransaction
@@ -14,8 +15,14 @@ import com.moneyflow.app.data.domain.SupportedCurrency
 import com.moneyflow.app.data.remote.CreateAccountRequest
 import com.moneyflow.app.data.remote.CreateTransactionRequest
 import com.moneyflow.app.data.remote.ErrorBody
+import com.moneyflow.app.data.remote.ConvertRequest
+import com.moneyflow.app.data.remote.ConversionDto
+import com.moneyflow.app.data.remote.PortfolioDto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,33 +49,72 @@ data class MoneyFlowUiState(
     val notice: String? = null,
     val lastSyncedAt: Instant? = null,
     val mutationVersion: Int = 0,
+    val accountsLoaded: Boolean = false,
+    val baseCurrency: String = "KZT",
+    val basePreferencePending: Boolean = false,
+    val cachedPortfolio: CachedPortfolio? = null,
+    val fxRefreshRequests: Int = 0,
+    val fxError: String? = null,
+    val lastFxConfirmedAt: Instant? = null,
+    val fxNow: Instant = Instant.now(),
+    val conversion: ConversionDto? = null,
+    val conversionWorking: Boolean = false,
+    val conversionError: String? = null,
 ) {
     val selectedAccount: Account? get() = accounts.firstOrNull { it.id == selectedAccountId }
     val refreshing: Boolean get() = refreshRequests > 0
+    val fxRefreshing: Boolean get() = fxRefreshRequests > 0
+    val portfolio: PortfolioDto? get() = cachedPortfolio?.portfolio?.takeIf {
+        accountsLoaded && it.baseCurrency == baseCurrency && it.matchesAccounts(accounts) && !it.ratesExpired(fxNow)
+    }
 }
 
 class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewModel() {
     private val _state = MutableStateFlow(MoneyFlowUiState())
     val state = _state.asStateFlow()
     private val selected = MutableStateFlow<String?>(null)
+    private val base = MutableStateFlow("KZT")
+    private val accountSource = MutableStateFlow<List<Account>?>(null)
+    private var conversionJob: Job? = null
+    private var conversionGeneration = 0L
 
     init {
         viewModelScope.launch {
             repository.session.collectLatest { session ->
                 selected.value = null
+                base.value = "KZT"
+                accountSource.value = null
+                clearConversion()
                 _state.update {
                     it.copy(starting = false, session = session, accounts = emptyList(),
-                        selectedAccountId = null, transactions = emptyList(), lastSyncedAt = null)
+                        selectedAccountId = null, transactions = emptyList(), lastSyncedAt = null,
+                        accountsLoaded = false, baseCurrency = "KZT", basePreferencePending = false,
+                        cachedPortfolio = null, fxError = null, lastFxConfirmedAt = null)
                 }
                 if (session != null) coroutineScope {
                     launch {
                         repository.observeAccounts(session.user.id).collect { accounts ->
                             val next = selected.value?.takeIf { id -> accounts.any { it.id == id } }
                                 ?: accounts.firstOrNull()?.id
-                            _state.update { it.copy(accounts = accounts, selectedAccountId = next) }
+                            _state.update { it.copy(accounts = accounts, selectedAccountId = next, accountsLoaded = true) }
+                            accountSource.value = accounts
                             selected.value = next
                         }
                     }
+                    launch {
+                        repository.observePreferences(session.user.id).collect { preferences ->
+                            _state.update {
+                                val changed = it.baseCurrency != preferences.baseCurrency
+                                it.copy(baseCurrency = preferences.baseCurrency,
+                                    basePreferencePending = preferences.pendingSync,
+                                    cachedPortfolio = if (changed) null else it.cachedPortfolio,
+                                    lastFxConfirmedAt = if (changed) null else it.lastFxConfirmedAt)
+                            }
+                            base.value = preferences.baseCurrency
+                        }
+                    }
+                    launch { fxRequest(session.token) { repository.refreshPreferences() } }
+                    launch { fxRequest(session.token) { repository.refreshCurrencies() } }
                     launch {
                         refreshRequest {
                             val user = repository.verifySession()
@@ -96,6 +142,29 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
         viewModelScope.launch {
             repository.pending.collect { pending -> _state.update { it.copy(pending = pending) } }
         }
+        viewModelScope.launch {
+            combine(repository.session, base, accountSource) { session, currency, accounts -> Triple(session, currency, accounts) }
+                .collectLatest { (session, currency, accounts) ->
+                    if (session == null || accounts == null) return@collectLatest
+                    _state.update { it.copy(cachedPortfolio = null, lastFxConfirmedAt = null) }
+                    coroutineScope {
+                        launch {
+                            repository.observePortfolio(session.user.id, currency).collect { cached ->
+                                if (repository.session.value?.token == session.token && base.value == currency) {
+                                    _state.update { it.copy(cachedPortfolio = cached) }
+                                }
+                            }
+                        }
+                        launch { fxRequest(session.token) { fetchPortfolio(currency, session.token) } }
+                    }
+                }
+        }
+        viewModelScope.launch {
+            while (isActive) {
+                delay(60_000)
+                _state.update { it.copy(fxNow = Instant.now()) }
+            }
+        }
     }
 
     fun authenticate(email: String, password: String, register: Boolean) = action {
@@ -121,6 +190,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
                 selected.value?.let { repository.refreshTransactions(it) }
             }
         }
+        refreshFx()
     }
 
     fun createAccount(name: String, currency: SupportedCurrency, opening: String) = action {
@@ -130,7 +200,8 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
         val account = repository.createAccount(CreateAccountRequest(normalizedName, currency.code, amount.toString()))
         selected.value = account.id
         _state.update {
-            it.copy(selectedAccountId = account.id, mutationVersion = it.mutationVersion + 1, notice = "Счёт создан")
+            it.copy(selectedAccountId = account.id, mutationVersion = it.mutationVersion + 1, notice = "Счёт создан",
+                cachedPortfolio = null, lastFxConfirmedAt = null)
         }
         refreshAfterWrite()
     }
@@ -155,7 +226,8 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
     }
 
     private fun transactionSaved() {
-        _state.update { it.copy(mutationVersion = it.mutationVersion + 1, notice = "Операция сохранена на сервере") }
+        _state.update { it.copy(mutationVersion = it.mutationVersion + 1, notice = "Операция сохранена на сервере",
+            cachedPortfolio = null, lastFxConfirmedAt = null) }
         refreshAfterWrite()
     }
 
@@ -177,6 +249,98 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
     }
 
     fun clearMessages() { _state.update { it.copy(error = null, notice = null) } }
+
+    fun setBaseCurrency(currency: String) {
+        if (currency == state.value.baseCurrency) return
+        val session = repository.session.value ?: return
+        _state.update { it.copy(fxError = null, cachedPortfolio = null, lastFxConfirmedAt = null) }
+        viewModelScope.launch {
+            fxRequest(session.token) {
+                repository.setBaseCurrency(currency)
+                if (repository.session.value?.token == session.token) fetchPortfolio(currency, session.token)
+            }
+        }
+    }
+
+    fun refreshFx() {
+        val session = repository.session.value ?: return
+        _state.update { it.copy(fxError = null) }
+        viewModelScope.launch {
+            fxRequest(session.token) {
+                repository.refreshPreferences()
+                if (repository.session.value?.token == session.token) {
+                    fetchPortfolio(repository.preferredBaseCurrency(), session.token)
+                }
+            }
+        }
+    }
+
+    fun clearConversion() {
+        conversionGeneration++
+        conversionJob?.cancel()
+        conversionJob = null
+        _state.update { it.copy(conversion = null, conversionWorking = false, conversionError = null) }
+    }
+
+    fun convert(amount: String, from: SupportedCurrency, to: SupportedCurrency) {
+        clearConversion()
+        val session = repository.session.value ?: return
+        val generation = conversionGeneration
+        conversionJob = viewModelScope.launch {
+            _state.update { it.copy(conversionWorking = true) }
+            try {
+                val minor = Money.parseMinor(amount, from)
+                val result = repository.convert(ConvertRequest(from.code, to.code, minor.toString()))
+                if (repository.session.value?.token == session.token && generation == conversionGeneration) {
+                    _state.update { it.copy(conversion = result) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (repository.session.value?.token == session.token && generation == conversionGeneration) {
+                    if (error is HttpException && error.code() == 401) handleError(error)
+                    else _state.update { it.copy(conversionError = fxMessage(error)) }
+                }
+            } finally {
+                if (generation == conversionGeneration) _state.update { it.copy(conversionWorking = false) }
+            }
+        }
+    }
+
+    private suspend fun fetchPortfolio(currency: String, token: String) {
+        repository.refreshPortfolio(currency)
+        if (repository.session.value?.token == token && base.value == currency) {
+            _state.update { it.copy(lastFxConfirmedAt = Instant.now(), fxNow = Instant.now(), fxError = null) }
+        }
+    }
+
+    private suspend fun fxRequest(token: String, block: suspend () -> Unit) {
+        _state.update { it.copy(fxRefreshRequests = it.fxRefreshRequests + 1) }
+        try {
+            block()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (repository.session.value?.token == token) {
+                if (error is HttpException && error.code() == 401) handleError(error)
+                else _state.update { it.copy(fxError = fxMessage(error)) }
+            }
+        } finally {
+            _state.update { it.copy(fxRefreshRequests = (it.fxRefreshRequests - 1).coerceAtLeast(0)) }
+        }
+    }
+
+    private fun fxMessage(error: Exception): String = when (error) {
+        is IOException -> "Нет связи с сервисом курсов. Счета и записи доступны; оценка из кэша помечена отдельно."
+        is HttpException -> when (error.code()) {
+            409 -> "Результат превышает допустимый размер суммы. Уменьшите значение."
+            503 -> "Курсы Frankfurter сейчас недоступны для этой пары. Попробуйте обновить позже."
+            429 -> "Слишком много запросов. Подождите и обновите курсы."
+            else -> "Не удалось получить курсы (${error.code()}). Финансовые записи доступны."
+        }
+        is IllegalArgumentException -> error.message ?: "Некорректный ответ сервиса курсов"
+        else -> "Не удалось обновить оценку в основной валюте. Финансовые записи доступны."
+    }
 
     private fun action(block: suspend () -> Unit) {
         if (state.value.working) return

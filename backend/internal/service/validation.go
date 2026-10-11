@@ -7,6 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/drissakov/moneyflow/backend/internal/fx"
 	"github.com/google/uuid"
 )
 
@@ -70,13 +71,18 @@ func ValidateAccount(name, currency, opening string) (string, int64, error) {
 	if !utf8.ValidString(name) || utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 100 {
 		return "", 0, Invalid("Account name must contain 1 to 100 characters.")
 	}
-	switch currency {
-	case "USD", "EUR", "KZT", "JPY", "KWD":
-	default:
-		return "", 0, Invalid("Currency must be USD, EUR, KZT, JPY, or KWD.")
+	if err := ValidateCurrency(currency); err != nil {
+		return "", 0, err
 	}
 	value, err := ParseMinor(opening, false)
 	return name, value, err
+}
+
+func ValidateCurrency(code string) error {
+	if _, ok := fx.Lookup(code); !ok {
+		return Invalid("Currency must be one of KZT, USD, EUR, JPY, KWD, RUB, GBP, CHF, AUD, CAD, CNY.")
+	}
+	return nil
 }
 
 type CreateTransactionInput struct {
