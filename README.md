@@ -9,7 +9,7 @@
 
 [![CI](https://github.com/drissakov/moneyflow/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/drissakov/moneyflow/actions/workflows/ci.yml) [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go&logoColor=white)](backend/go.mod) [![Kotlin](https://img.shields.io/badge/Kotlin-2.1.21-7F52FF?logo=kotlin&logoColor=white)](android/build.gradle.kts) [![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](android/app/build.gradle.kts) [![Compose](https://img.shields.io/badge/Jetpack_Compose-Material_3-4285F4?logo=jetpackcompose&logoColor=white)](android/app/src/main/java/com/moneyflow/app/ui/MoneyFlowApp.kt) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-4169E1?logo=postgresql&logoColor=white)](infra/compose.yaml) [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](infra/compose.yaml) [![Status](https://img.shields.io/badge/Статус-MVP-F59E0B)](#features)
 
-[🚀 Быстрый старт](#quick-start) · [📱 Android](#android) · [🔌 API](#api) · [🌐 VPS](#deployment) · [🛠 Решение проблем](#troubleshooting)
+[🚀 Быстрый старт](#quick-start) · [📱 Android](#android) · [🔌 API](#api) · [🌐 Публичный сервер](#deployment) · [🛠 Решение проблем](#troubleshooting)
 
 <img src="docs/assets/android-dashboard.png" alt="MoneyFlow: счет и расход в Android-приложении" width="320">
 
@@ -28,7 +28,7 @@ MoneyFlow — pet-проект для учета личных финансов �
 |---|---|---|
 | [Возможности](#features) | [Архитектура и стек](#architecture) | [Проверки и CI](#testing) |
 | [Требования](#requirements) | [Структура](#structure) | [Миграции](#migrations) |
-| [Docker Compose](#quick-start) | [Настройки](#configuration) | [VPS / HTTPS / release](#deployment) |
+| [Docker Compose](#quick-start) | [Настройки](#configuration) | [Бесплатный сервер / VPS / release](#deployment) |
 | [Go + PostgreSQL без Docker](#native-server) | [API и примеры](#api) | [Резервные копии](#backups) |
 | [Android Studio / CLI / телефон](#android) | [Деньги, сессии, офлайн](#data-rules) | [Проблемы](#troubleshooting) · [План](#roadmap) |
 
@@ -54,6 +54,9 @@ MoneyFlow — pet-проект для учета личных финансов �
 | Разделение пользователей | ✅ Проверки сервера и отдельный локальный кэш |
 | SQL-миграции, Docker, конфигурация HTTPS | ✅ В репозитории |
 | GitHub Actions | ✅ Backend / PostgreSQL и Android build / lint / tests |
+| Публичный API | ✅ [Vercel Hobby + Neon Free](https://moneyflow-api-two.vercel.app/healthz), HTTPS и постоянная PostgreSQL |
+| Внешний мониторинг | ✅ Каждые 6 часов: HTTPS, сертификат, API, БД и свежесть backup |
+| Зашифрованные backup | ✅ Ежедневно, 7 копий за 7 дней, age и проверка восстановления |
 
 **Ограничения MVP:** в приложении видны последние **50 операций** выбранного счета; API допускает limit 1–100, но курсорной пагинации нет. Баланс и месячная аналитика учитывают всю историю. Аналитика показывает выбранную валюту счета без пересчета по курсу: KZT и USD смотрятся отдельно. Конвертация — оценка по справочному курсу, а не перевод денег между счетами. Пока нет изменения суммы/удаления операций, переводов между счетами, бюджетных лимитов, подтверждения email и восстановления пароля.
 
@@ -105,11 +108,11 @@ flowchart TD
     VM --> R["Repository"]
     R <--> ROOM[("Room · кэш")]
     R <--> SEC["Keystore · токен / pending"]
-    R <-->|"Retrofit / OkHttp · HTTPS / JSON"| EDGE["Caddy · TLS на VPS"]
+    R <-->|"Retrofit / OkHttp · HTTPS / JSON"| EDGE["Vercel · HTTPS / Caddy на VPS"]
     EDGE --> API["Go / Gin · REST /api/v1"]
     API --> SVC["Сервисы · auth / accounts / transactions"]
     SVC --> ORM["GORM + SQL"]
-    ORM --> PG[("PostgreSQL")]
+    ORM --> PG[("PostgreSQL · Neon / VPS")]
     SVC --> FX["FX · точные коэффициенты / кэш"]
     FX --> PG
     FX --> FF["Frankfurter v2 · ежедневные курсы"]
@@ -124,7 +127,7 @@ flowchart TD
     class PG database
 ~~~
 
-Локально Android обращается прямо к API на порту 8080. Caddy включается в production для HTTPS. Backend — одно Go-приложение с отдельными пакетами; Redis и микросервисы на этом этапе не требуются.
+Локально Android обращается прямо к API на порту 8080. Публичный тестовый сервер работает через Vercel HTTPS и Neon PostgreSQL; для отдельного VPS подготовлен Caddy. Backend — одно Go-приложение с отдельными пакетами; Redis и микросервисы на этом этапе не требуются.
 
 | Слой | Технологии и версии из проекта |
 |---|---|
@@ -133,7 +136,7 @@ flowchart TD
 | Android сеть | Retrofit 2.11.0, OkHttp 4.12.0, Gson 2.11.0 |
 | Сборка | Gradle 8.11.1, AGP 8.9.2, KSP 2.1.21-2.0.1 |
 | Backend | Go 1.25+, Gin, GORM; версии в `go.mod` / `go.sum` |
-| База / инфраструктура | PostgreSQL 17.11, Docker Compose, Caddy 2.11.7 |
+| База / инфраструктура | Neon PostgreSQL 18.6, Vercel Hobby; локально / на VPS PostgreSQL 17.11, Docker Compose, Caddy 2.11.7 |
 | Курсы / конвертация | Frankfurter v2, USD-снимок в PostgreSQL, рациональная арифметика Go |
 | Контракт / проверки | OpenAPI 3.0.3; Go tests / vet / race, JUnit / MockWebServer, Android Lint |
 
@@ -717,6 +720,16 @@ Runner обычно завершен, поэтому нужен **`run --rm migr
 
 Основной вариант для публичного тестирования — **Vercel Hobby + Neon Free**. Vercel запускает Go API и выдаёт HTTPS-адрес `*.vercel.app`; Neon хранит PostgreSQL, включая пользователей, сессии и операции. Покупать сервер, домен или S3-хранилище не нужно. Подробная настройка, ограничения бесплатных тарифов и восстановление описаны в **[инструкции бесплатного размещения](docs/FREE_HOSTING.md)**.
 
+**Действующий API:** [`https://moneyflow-api-two.vercel.app/`](https://moneyflow-api-two.vercel.app/healthz). Проверки: [`/healthz`](https://moneyflow-api-two.vercel.app/healthz) и [`/readyz`](https://moneyflow-api-two.vercel.app/readyz). Корневой путь не содержит сайта: приложение обращается к `/api/v1/`.
+
+Для запуска приложения с этим сервером откройте `android/` в Android Studio и задайте `MONEYFLOW_API_URL=https://moneyflow-api-two.vercel.app/` в своих локальных Gradle properties, затем нажмите **Run**. Или из `android/` установите debug APK на подключённый телефон / эмулятор:
+
+~~~powershell
+.\gradlew.bat :app:installDebug -PMONEYFLOW_API_URL=https://moneyflow-api-two.vercel.app/
+~~~
+
+Для этой сборки локальные PostgreSQL и Go API запускать не нужно. Зарегистрируйте отдельный тестовый профиль; данные сохраняются на публичном сервере.
+
 В Vercel проект использует Root Directory **`backend`**, конфигурацию [backend/vercel.json](backend/vercel.json) и команды:
 
 ~~~sh
@@ -728,6 +741,8 @@ go build -buildvcs=false -o server ./cmd/api
 ### Мониторинг и альтернативный VPS
 
 [Free API monitoring](.github/workflows/free-monitor.yml) проверяет HTTPS, срок сертификата, `/healthz`, `/readyz` и свежесть успешной резервной копии **четыре раза в сутки**. Результат доступен в GitHub Actions. Частые проверки не держат Neon постоянно активным. Бесплатные тарифы имеют квоты и не дают круглосуточную гарантию доступности.
+
+Размещение проверено через регистрацию, счета, категории, запись операций и месячную аналитику. [Мониторинг API и backup прошёл успешно](https://github.com/drissakov/moneyflow/actions/runs/38237719597); [CI](https://github.com/drissakov/moneyflow/actions/runs/38237715521) проверил Go / PostgreSQL и сборку, lint и тесты Android.
 
 Для отдельного Ubuntu VPS подготовлен [production runbook](docs/PRODUCTION.md): Caddy, PostgreSQL, приватный Prometheus, Grafana и Alertmanager, автоматический restic backup в S3-совместимое хранилище и изолированная проверка восстановления. [Production Compose](infra/compose.production.yaml) запускается отдельно от локального файла. Секреты хранятся в `secrets/`; перед миграциями скрипт требует проверенную резервную копию. Мониторинг доступен через SSH-туннель, а наружу открываются только HTTP/HTTPS. Этот вариант требует своего VPS и не включён в бесплатное размещение.
 
@@ -749,6 +764,8 @@ Release package: `com.moneyflow.app`; HTTP запрещен. Перед публ
 Для бесплатного сервера [Free encrypted database backup](.github/workflows/free-backup.yml) запускается ежедневно в **03:17 UTC**. Он получает согласованный PostgreSQL snapshot, восстанавливает dump в отдельную PostgreSQL, сравнивает отпечатки таблиц и шифрует архив через **age**. В закрытом **draft release** GitHub сохраняются последние **7 копий за 7 дней**, каждая до 20 MiB. Черновик не публикуется; автоматизация не использует платное хранилище артефактов Actions для backup.
 
 Приватный ключ восстановления хранится отдельно от GitHub и Vercel. Публичный ключ задаётся переменной `MONEYFLOW_BACKUP_AGE_RECIPIENT`; URI базы — секретом `MONEYFLOW_BACKUP_DATABASE_URL`. Инструкции скачивания, проверки SHA-256, расшифровки и восстановления находятся в [FREE_HOSTING.md](docs/FREE_HOSTING.md). Расписание GitHub может задерживаться и отключается при длительной неактивности репозитория; монитор проверяет возраст фактической копии.
+
+[Первая копия действующей Neon БД создана успешно](https://github.com/drissakov/moneyflow/actions/runs/38236518827). После скачивания проверены SHA-256, расшифровка локальным приватным ключом и восстановление в новую PostgreSQL 18: отпечатки всех восьми таблиц совпали. [Проверки сценариев backup](https://github.com/drissakov/moneyflow/actions/runs/38236515404) также проверяют отказ с неправильным ключом и очистку временных незашифрованных файлов.
 
 Ниже сохранён ручной сценарий для **локальной** базы. Для VPS используется отдельный [restic-сценарий](infra/backup/README.md).
 
@@ -851,7 +868,7 @@ docker compose --env-file .env.production -f infra/compose.production.yaml up -d
 - [x] Точные деньги, изоляция пользователей и повтор без дублей.
 - [x] Кэш, SQL-миграции, CI и Docker/HTTPS основа.
 - [x] 11 валют, Frankfurter v2, конвертер и общий баланс в выбранной валюте.
-- [ ] Публичный deploy, мониторинг, автоматические зашифрованные backup.
+- [x] Публичный deploy, мониторинг, автоматические зашифрованные backup.
 - [ ] Signed APK/AAB и публикация.
 - [ ] Подтверждение email и восстановление пароля.
 - [x] Стандартные и свои категории, подкатегории расходов, месячная аналитика с диаграммой.
