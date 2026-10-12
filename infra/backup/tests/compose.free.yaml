@@ -30,6 +30,13 @@ services:
       context: ../../..
       dockerfile: infra/backup/Dockerfile.free
     entrypoint: ["/bin/bash", "/tests/free-integration.sh"]
+    # Match the production runner's unprivileged client and tmpfs ownership.
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       PGHOST: source-db
       PGUSER: source_admin
@@ -42,8 +49,9 @@ services:
       - ./:/tests:ro
       - ../../../backend/internal/migrations/sql:/migrations:ro
     tmpfs:
-      - /work:size=256m,mode=0700
-      - /output:size=24m,mode=0755
+      - /work:size=256m,mode=0700,uid=1000,gid=1000
+      - /output:size=24m,mode=0700,uid=1000,gid=1000
+      - /tmp:size=16m,mode=1777
     depends_on:
       source-db:
         condition: service_healthy

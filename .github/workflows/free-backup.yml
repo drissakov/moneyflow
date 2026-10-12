@@ -60,8 +60,9 @@ jobs:
             sleep 2
           done
           docker exec moneyflow-backup-verify-db pg_isready -h 127.0.0.1 -U moneyflow_verify -d postgres >/dev/null
-          docker run --rm --network moneyflow-backup-verify --read-only --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /work:rw,size=256m,mode=0700 --tmpfs /tmp:rw,size=16m,mode=1777 \
+          docker run --rm --network moneyflow-backup-verify --user "$(id -u):$(id -g)" \
+            --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs "/work:rw,size=256m,mode=0700,uid=$(id -u),gid=$(id -g)" --tmpfs /tmp:rw,size=16m,mode=1777 \
             -v "$backup_temp/source-secrets/source_database_url:/run/secrets/source_database_url:ro" \
             -v "$backup_temp/restore-secrets/restore_db_password:/run/secrets/restore_db_password:ro" \
             -v "$backup_temp/output:/output" \
