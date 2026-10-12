@@ -720,7 +720,7 @@ Runner обычно завершен, поэтому нужен **`run --rm migr
 В Vercel проект использует Root Directory **`backend`**, конфигурацию [backend/vercel.json](backend/vercel.json) и команды:
 
 ~~~sh
-go build -o server ./cmd/api
+go build -buildvcs=false -o server ./cmd/api
 ~~~
 
 Миграции запускаются отдельно **до** публикации обновлённого API. Для Go API требуется pooled-строка Neon с проверкой TLS; для миграций и резервных копий используется direct-строка. Настройки пула `4 / 0 / 30s` и отсутствие `METRICS_PORT` позволяют базе засыпать при простое.

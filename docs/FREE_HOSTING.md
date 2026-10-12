@@ -57,7 +57,7 @@ try {
 
 ## 2. Подключить API к Vercel Hobby
 
-Импортируйте `drissakov/moneyflow` в свой личный проект Vercel Hobby. Подготовленный проект называется `moneyflow-api`. Go-модуль проекта расположен в `backend/`; настройте **Root Directory = backend**, **Framework Preset = Go**. `backend/vercel.json` использует команду `go build -o server ./cmd/api`; существующий Go сервер обслуживает все API пути. Не выбирайте платный trial. Создайте переменные окружения для тестового публичного deployment:
+Импортируйте `drissakov/moneyflow` в свой личный проект Vercel Hobby. Подготовленный проект называется `moneyflow-api`. Go-модуль проекта расположен в `backend/`; настройте **Root Directory = backend**, **Framework Preset = Go**. `backend/vercel.json` использует команду `go build -buildvcs=false -o server ./cmd/api`; существующий Go сервер обслуживает все API пути. Для публикации через CLI запускайте `vercel deploy` из корня репозитория. Не выбирайте платный trial. Создайте переменные окружения для тестового публичного deployment:
 
 | Переменная | Значение |
 | --- | --- |
