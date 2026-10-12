@@ -1,5 +1,7 @@
 * text=auto
 *.sql text eol=lf
 *.sh text eol=lf
+Dockerfile* text eol=lf
+*.Dockerfile text eol=lf
 gradlew text eol=lf
 *.bat text eol=crlf

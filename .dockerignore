@@ -10,3 +10,8 @@ web
 *.log
 backups
 *.dump
+secrets
+.vercel
+**/.vercel
+*.agekey
+__pycache__

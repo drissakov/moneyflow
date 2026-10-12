@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 5s
+  evaluation_interval: 15s
+  external_labels:
+    application: moneyflow
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]
+
+scrape_configs:
+  - job_name: moneyflow-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: [api:9090]
+  - job_name: moneyflow-backups
+    static_configs:
+      - targets: [node-exporter:9100]
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+  - job_name: alertmanager
+    static_configs:
+      - targets: [alertmanager:9093]

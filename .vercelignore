@@ -1,0 +1,18 @@
+# Deploy from the repository root; the Vercel project uses backend/ as its root.
+.git/
+android/
+web/
+infra/
+scripts/
+docs/
+secrets/
+backups/
+**/.env*
+**/.vercel/
+**/.agents/
+**/skills-lock.json
+**/__pycache__/
+**/*.dump
+**/*.agekey
+backend/bin/
+backend/server

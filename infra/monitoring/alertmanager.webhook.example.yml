@@ -1,0 +1,25 @@
+# Optional receiver. Copy this to a private deployment configuration and mount
+# the real HTTPS webhook URL as /run/secrets/alert_webhook_url. Never commit it.
+# The endpoint must accept Alertmanager's generic JSON webhook payload.
+global:
+  resolve_timeout: 5m
+route:
+  receiver: webhook
+  group_by: [alertname, application]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+receivers:
+  - name: webhook
+    webhook_configs:
+      - url_file: /run/secrets/alert_webhook_url
+        send_resolved: true
+        http_config:
+          follow_redirects: false
+inhibit_rules:
+  - source_matchers: [alertname="MoneyFlowAPIDown"]
+    target_matchers: [alertname=~"MoneyFlowDatabaseNotReady|MoneyFlowDatabaseProbeStale"]
+    equal: [application]
+  - source_matchers: [alertname="MoneyFlowBackupExporterDown"]
+    target_matchers: [alertname=~"MoneyFlowBackupMetricsMissing|MoneyFlowBackupTooOld|MoneyFlowBackupIntegrityTooOld|MoneyFlowRestoreVerificationTooOld"]
+    equal: [application]

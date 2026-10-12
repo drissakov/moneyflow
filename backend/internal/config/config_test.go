@@ -1,11 +1,16 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestConfigDefaultsAndBounds(t *testing.T) {
+	t.Setenv("DATABASE_URL_FILE", "")
+	t.Setenv("METRICS_PORT", "")
 	t.Setenv("DATABASE_URL", "postgres://unused")
 	t.Setenv("PORT", "")
 	t.Setenv("SESSION_TTL", "")
@@ -31,6 +36,8 @@ func TestConfigDefaultsAndBounds(t *testing.T) {
 }
 
 func TestFXConfigBounds(t *testing.T) {
+	t.Setenv("DATABASE_URL_FILE", "")
+	t.Setenv("METRICS_PORT", "")
 	t.Setenv("DATABASE_URL", "postgres://unused")
 	t.Setenv("PORT", "8080")
 	t.Setenv("SESSION_TTL", "720h")
@@ -60,5 +67,95 @@ func TestFXConfigBounds(t *testing.T) {
 	t.Setenv("FRANKFURTER_URL", "http://example.com/v2")
 	if _, err := Load(); err == nil {
 		t.Fatal("insecure remote Frankfurter URL accepted")
+	}
+}
+
+func TestMetricsListenerConfig(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://unused")
+	t.Setenv("DATABASE_URL_FILE", "")
+	t.Setenv("PORT", "8080")
+	t.Setenv("METRICS_PORT", "9090")
+	t.Setenv("APP_ENV", "test")
+	c, err := Load()
+	if err != nil || c.MetricsPort != "9090" {
+		t.Fatalf("metrics config invalid: %v", err)
+	}
+	for _, port := range []string{"8080", "08080", "0", "65536", "secret-port"} {
+		t.Setenv("METRICS_PORT", port)
+		if _, err := Load(); err == nil {
+			t.Fatalf("invalid or colliding metrics port accepted: %q", port)
+		}
+	}
+}
+
+func TestDatabaseURLFile(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("METRICS_PORT", "")
+	t.Setenv("APP_ENV", "test")
+	path := filepath.Join(t.TempDir(), "database_url")
+	t.Setenv("DATABASE_URL_FILE", path)
+	if err := os.WriteFile(path, []byte("postgres://user:secret@db/moneyflow\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load()
+	if err != nil || c.DatabaseURL != "postgres://user:secret@db/moneyflow" {
+		t.Fatal("database URL file not loaded")
+	}
+	t.Setenv("DATABASE_URL", "postgres://another-secret")
+	if _, err := Load(); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatal("ambiguous database URL sources accepted or leaked")
+	}
+	t.Setenv("DATABASE_URL", "")
+	for _, value := range []string{"\n", strings.Repeat("x", 16*1024+1)} {
+		if err := os.WriteFile(path, []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(); err == nil {
+			t.Fatal("empty or oversized database URL file accepted")
+		}
+	}
+	t.Setenv("DATABASE_URL_FILE", filepath.Join(t.TempDir(), "private-secret-filename"))
+	if _, err := Load(); err == nil || strings.Contains(err.Error(), "private-secret-filename") {
+		t.Fatal("unreadable file accepted or path leaked")
+	}
+}
+
+func TestDatabasePoolBoundsForServerless(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://unused")
+	t.Setenv("DATABASE_URL_FILE", "")
+	t.Setenv("APP_ENV", "test")
+	t.Setenv("METRICS_PORT", "")
+	t.Setenv("DATABASE_MAX_OPEN_CONNECTIONS", "4")
+	t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", "0")
+	t.Setenv("DATABASE_CONNECTION_MAX_IDLE_TIME", "30s")
+	c, err := Load()
+	if err != nil || c.DatabaseMaxOpen != 4 || c.DatabaseMaxIdle != 0 || c.DatabaseMaxIdleTime != 30*time.Second {
+		t.Fatal("serverless pool config rejected")
+	}
+	for _, value := range []string{"0", "65", "many"} {
+		t.Setenv("DATABASE_MAX_OPEN_CONNECTIONS", value)
+		if _, err := Load(); err == nil {
+			t.Fatalf("invalid max open connections accepted: %q", value)
+		}
+	}
+	t.Setenv("DATABASE_MAX_OPEN_CONNECTIONS", "4")
+	for _, value := range []string{"-1", "5", "many"} {
+		t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", value)
+		if _, err := Load(); err == nil {
+			t.Fatalf("invalid max idle connections accepted: %q", value)
+		}
+	}
+	t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", "0")
+	for _, value := range []string{"0", "500ms", "31m", "forever"} {
+		t.Setenv("DATABASE_CONNECTION_MAX_IDLE_TIME", value)
+		if _, err := Load(); err == nil {
+			t.Fatalf("invalid idle lifetime accepted: %q", value)
+		}
+	}
+	t.Setenv("DATABASE_MAX_IDLE_CONNECTIONS", "")
+	t.Setenv("DATABASE_CONNECTION_MAX_IDLE_TIME", "")
+	c, err = Load()
+	if err != nil || c.DatabaseMaxIdle != 4 {
+		t.Fatal("default idle count was not bounded by a smaller open pool")
 	}
 }

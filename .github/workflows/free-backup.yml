@@ -1,0 +1,84 @@
+name: Free encrypted database backup
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: moneyflow-free-database-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    if: vars.MONEYFLOW_FREE_BACKUPS_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      BACKUP_DATABASE_URL: ${{ secrets.MONEYFLOW_BACKUP_DATABASE_URL }}
+      AGE_RECIPIENT: ${{ vars.MONEYFLOW_BACKUP_AGE_RECIPIENT }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Validate configured backup prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$BACKUP_DATABASE_URL" && -n "$AGE_RECIPIENT" ]] || {
+            echo 'Configure MONEYFLOW_BACKUP_DATABASE_URL and MONEYFLOW_BACKUP_AGE_RECIPIENT before enabling backups.' >&2
+            exit 1
+          }
+          [[ "$AGE_RECIPIENT" =~ ^age1[0-9a-z]{58}$ ]] || exit 1
+      - name: Dump, restore verify and encrypt
+        shell: bash
+        run: |
+          set -euo pipefail
+          backup_temp=$(mktemp -d "$RUNNER_TEMP/moneyflow-backup.XXXXXX")
+          echo "BACKUP_OUTPUT=$backup_temp/output" >> "$GITHUB_ENV"
+          mkdir -m 700 "$backup_temp/source-secrets" "$backup_temp/restore-secrets" "$backup_temp/output"
+          printf '%s' "$BACKUP_DATABASE_URL" > "$backup_temp/source-secrets/source_database_url"
+          openssl rand -hex 32 > "$backup_temp/restore-secrets/restore_db_password"
+          cleanup() {
+            docker rm -f moneyflow-backup-verify-db >/dev/null 2>&1 || true
+            docker network rm moneyflow-backup-verify >/dev/null 2>&1 || true
+            rm -f -- "$backup_temp/source-secrets/source_database_url" "$backup_temp/restore-secrets/restore_db_password"
+          }
+          trap cleanup EXIT
+          docker build -f infra/backup/Dockerfile.free -t moneyflow-free-backup .
+          docker network create moneyflow-backup-verify >/dev/null
+          docker run -d --name moneyflow-backup-verify-db --network moneyflow-backup-verify --network-alias restore-db \
+            --tmpfs /var/lib/postgresql:rw,size=512m,mode=0700 \
+            -v "$backup_temp/restore-secrets:/run/secrets:ro" \
+            -e POSTGRES_USER=moneyflow_verify -e POSTGRES_PASSWORD_FILE=/run/secrets/restore_db_password \
+            postgres:18.6-alpine3.23 >/dev/null
+          for attempt in $(seq 1 60); do
+            if docker exec moneyflow-backup-verify-db pg_isready -U moneyflow_verify -d postgres >/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec moneyflow-backup-verify-db pg_isready -U moneyflow_verify -d postgres >/dev/null
+          docker run --rm --network moneyflow-backup-verify --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /work:rw,size=256m,mode=0700 --tmpfs /tmp:rw,size=16m,mode=1777 \
+            -v "$backup_temp/source-secrets/source_database_url:/run/secrets/source_database_url:ro" \
+            -v "$backup_temp/restore-secrets/restore_db_password:/run/secrets/restore_db_password:ro" \
+            -v "$backup_temp/output:/output" \
+            -e SOURCE_DATABASE_URL_FILE=/run/secrets/source_database_url -e AGE_RECIPIENT \
+            -e RESTORE_PGHOST=restore-db -e RESTORE_PGUSER=moneyflow_verify \
+            -e RESTORE_PGPASSWORD_FILE=/run/secrets/restore_db_password moneyflow-free-backup
+      - name: Store ciphertext in private draft release and retain seven backups
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 infra/backup/publish-draft-backup.py "$BACKUP_OUTPUT"
+      - name: Clean encrypted runner output
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${BACKUP_OUTPUT:-}" && "$BACKUP_OUTPUT" == "$RUNNER_TEMP"/moneyflow-backup.*/output ]]; then
+            rm -f -- "$BACKUP_OUTPUT/moneyflow-database.tar.age" "$BACKUP_OUTPUT/moneyflow-database.tar.age.sha256" "$BACKUP_OUTPUT/verification.json"
+          fi

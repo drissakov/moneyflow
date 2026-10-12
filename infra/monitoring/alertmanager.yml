@@ -1,0 +1,19 @@
+# Local alerts remain visible in Prometheus/Alertmanager until a receiver is configured.
+# No external notification is sent by this default configuration.
+global:
+  resolve_timeout: 5m
+route:
+  receiver: local-alerts
+  group_by: [alertname, application]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+receivers:
+  - name: local-alerts
+inhibit_rules:
+  - source_matchers: [alertname="MoneyFlowAPIDown"]
+    target_matchers: [alertname=~"MoneyFlowDatabaseNotReady|MoneyFlowDatabaseProbeStale"]
+    equal: [application]
+  - source_matchers: [alertname="MoneyFlowBackupExporterDown"]
+    target_matchers: [alertname=~"MoneyFlowBackupMetricsMissing|MoneyFlowBackupTooOld|MoneyFlowBackupIntegrityTooOld|MoneyFlowRestoreVerificationTooOld"]
+    equal: [application]

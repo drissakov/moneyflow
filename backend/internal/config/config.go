@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -12,18 +13,37 @@ import (
 )
 
 type Config struct {
-	DatabaseURL    string
-	Port           string
-	SessionTTL     time.Duration
-	Production     bool
-	TrustedProxies []string
-	FrankfurterURL string
-	FXCacheTTL     time.Duration
-	FXMaxStale     time.Duration
+	DatabaseURL         string
+	DatabaseMaxOpen     int
+	DatabaseMaxIdle     int
+	DatabaseMaxIdleTime time.Duration
+	Port                string
+	MetricsPort         string
+	SessionTTL          time.Duration
+	Production          bool
+	TrustedProxies      []string
+	FrankfurterURL      string
+	FXCacheTTL          time.Duration
+	FXMaxStale          time.Duration
 }
 
 func Load() (Config, error) {
-	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), Port: os.Getenv("PORT"), SessionTTL: 30 * 24 * time.Hour}
+	c := Config{DatabaseURL: os.Getenv("DATABASE_URL"), Port: os.Getenv("PORT"), MetricsPort: os.Getenv("METRICS_PORT"), SessionTTL: 30 * 24 * time.Hour}
+	if path := os.Getenv("DATABASE_URL_FILE"); path != "" {
+		if c.DatabaseURL != "" {
+			return c, fmt.Errorf("DATABASE_URL and DATABASE_URL_FILE are mutually exclusive")
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return c, fmt.Errorf("could not read DATABASE_URL_FILE")
+		}
+		value, readErr := io.ReadAll(io.LimitReader(file, 16*1024+1))
+		file.Close()
+		if readErr != nil || len(value) > 16*1024 {
+			return c, fmt.Errorf("DATABASE_URL_FILE must be readable and at most 16384 bytes")
+		}
+		c.DatabaseURL = strings.TrimSpace(string(value))
+	}
 	c.FrankfurterURL = os.Getenv("FRANKFURTER_URL")
 	if c.FrankfurterURL == "" {
 		c.FrankfurterURL = "https://api.frankfurter.dev/v2"
@@ -51,7 +71,34 @@ func Load() (Config, error) {
 		return c, fmt.Errorf("FX_MAX_STALE must be at least FX_CACHE_TTL")
 	}
 	if c.DatabaseURL == "" {
-		return c, fmt.Errorf("DATABASE_URL is required")
+		return c, fmt.Errorf("DATABASE_URL or DATABASE_URL_FILE is required")
+	}
+	c.DatabaseMaxOpen = 20
+	c.DatabaseMaxIdle = 5
+	c.DatabaseMaxIdleTime = 5 * time.Minute
+	if raw := os.Getenv("DATABASE_MAX_OPEN_CONNECTIONS"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > 64 {
+			return c, fmt.Errorf("DATABASE_MAX_OPEN_CONNECTIONS must be between 1 and 64")
+		}
+		c.DatabaseMaxOpen = value
+	}
+	if raw := os.Getenv("DATABASE_MAX_IDLE_CONNECTIONS"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 || value > c.DatabaseMaxOpen {
+			return c, fmt.Errorf("DATABASE_MAX_IDLE_CONNECTIONS must be between 0 and DATABASE_MAX_OPEN_CONNECTIONS")
+		}
+		c.DatabaseMaxIdle = value
+	}
+	if c.DatabaseMaxIdle > c.DatabaseMaxOpen {
+		c.DatabaseMaxIdle = c.DatabaseMaxOpen
+	}
+	if raw := os.Getenv("DATABASE_CONNECTION_MAX_IDLE_TIME"); raw != "" {
+		value, err := time.ParseDuration(raw)
+		if err != nil || value < time.Second || value > 30*time.Minute {
+			return c, fmt.Errorf("DATABASE_CONNECTION_MAX_IDLE_TIME must be between 1s and 30m")
+		}
+		c.DatabaseMaxIdleTime = value
 	}
 	if c.Port == "" {
 		c.Port = "8080"
@@ -59,6 +106,15 @@ func Load() (Config, error) {
 	port, err := strconv.Atoi(c.Port)
 	if err != nil || port < 1 || port > 65535 {
 		return c, fmt.Errorf("PORT must be between 1 and 65535")
+	}
+	if c.MetricsPort != "" {
+		metricsPort, err := strconv.Atoi(c.MetricsPort)
+		if err != nil || metricsPort < 1 || metricsPort > 65535 {
+			return c, fmt.Errorf("METRICS_PORT must be between 1 and 65535, or empty to disable")
+		}
+		if metricsPort == port {
+			return c, fmt.Errorf("METRICS_PORT must differ from PORT")
+		}
 	}
 	if value := os.Getenv("SESSION_TTL"); value != "" {
 		c.SessionTTL, err = time.ParseDuration(value)

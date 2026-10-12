@@ -44,6 +44,20 @@ backend/bin/
 /backups/
 *.dump
 
+.vercel/
+/secrets/
+/.production-deploy.lock
+/.production-deployed-commit
+/moneyflow-backup-key.txt
+*.agekey
+__pycache__/
+/backend/.agents/
+/backend/skills-lock.json
+/.agents/
+/skills-lock.json
+
 # Editor/IDE
 # .idea/
 # .vscode/
+.vercel
+.env*

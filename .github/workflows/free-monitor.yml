@@ -1,0 +1,31 @@
+name: Free API monitoring
+
+on:
+  schedule:
+    # Four checks per day limit Neon wake-ups on the free testing deployment.
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: moneyflow-free-monitor
+  cancel-in-progress: true
+
+jobs:
+  readiness:
+    if: vars.MONEYFLOW_FREE_MONITOR_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Check HTTPS, API readiness and backup freshness
+        env:
+          MONEYFLOW_API_URL: ${{ vars.MONEYFLOW_API_URL }}
+          MONEYFLOW_FREE_BACKUPS_ENABLED: ${{ vars.MONEYFLOW_FREE_BACKUPS_ENABLED }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/production/free-monitor.py

@@ -713,73 +713,23 @@ docker compose --env-file .env -f infra/compose.yaml up -d api
 Runner обычно завершен, поэтому нужен **`run --rm migrate`**, а не `exec migrate`. `restart` не пересобирает образ и не применяет SQL. Перед изменениями базы сделайте backup.
 
 <a id="deployment"></a>
-## 🌐 VPS, HTTPS и Android release
+## 🌐 Бесплатный сервер, HTTPS и Android release
 
-[Production Compose](infra/compose.production.yaml) — **самостоятельный** стек; используйте его отдельно от локального файла. Нужны Linux VPS с Docker/Compose, домен API с DNS-записью на VPS и доступные TCP 80/443 для Caddy. PostgreSQL и Go API не публикуют порты наружу.
+Основной вариант для публичного тестирования — **Vercel Hobby + Neon Free**. Vercel запускает Go API и выдаёт HTTPS-адрес `*.vercel.app`; Neon хранит PostgreSQL, включая пользователей, сессии и операции. Покупать сервер, домен или S3-хранилище не нужно. Подробная настройка, ограничения бесплатных тарифов и восстановление описаны в **[инструкции бесплатного размещения](docs/FREE_HOSTING.md)**.
 
-На VPS:
-
-~~~sh
-git clone https://github.com/drissakov/moneyflow.git
-cd moneyflow
-git switch main
-if [ ! -f .env.production ]; then cp .env.production.example .env.production; fi
-chmod 600 .env.production
-~~~
-
-Отредактируйте файл. Это **образец**, не готовые реквизиты:
-
-~~~dotenv
-POSTGRES_USER=moneyflow
-POSTGRES_DB=moneyflow
-POSTGRES_PASSWORD=REPLACE_WITH_LONG_RANDOM_URL_SAFE_PASSWORD
-DATABASE_URL=postgres://moneyflow:REPLACE_WITH_LONG_RANDOM_URL_SAFE_PASSWORD@db:5432/moneyflow?sslmode=disable
-PORT=8080
-SESSION_TTL=168h
-FRANKFURTER_URL=https://api.frankfurter.dev/v2
-FX_CACHE_TTL=6h
-FX_MAX_STALE=168h
-DOMAIN=api.your-domain.com
-ACME_EMAIL=you@your-domain.com
-~~~
+В Vercel проект использует Root Directory **`backend`**, конфигурацию [backend/vercel.json](backend/vercel.json) и команды:
 
 ~~~sh
-docker compose --env-file .env.production -f infra/compose.production.yaml up --build -d
-docker compose --env-file .env.production -f infra/compose.production.yaml ps -a
-docker compose --env-file .env.production -f infra/compose.production.yaml logs --tail=100 migrate api caddy
-task_attempt=0
-until curl --fail --silent --max-time 3 https://api.your-domain.com/readyz >/dev/null; do
-  task_attempt=$((task_attempt + 1))
-  if [ "$task_attempt" -ge 60 ]; then
-    echo 'HTTPS API не готов: проверьте DNS и логи Caddy / API / migrate' >&2
-    exit 1
-  fi
-  sleep 2
-done
-curl --fail https://api.your-domain.com/readyz
+go build -o server ./cmd/api
 ~~~
 
-Caddy получает сертификат и проксирует API. Проверьте DNS, включая AAAA, если она есть. `sslmode=disable` относится к PostgreSQL в приватной Compose-сети; Android использует HTTPS.
+Миграции запускаются отдельно **до** публикации обновлённого API. Для Go API требуется pooled-строка Neon с проверкой TLS; для миграций и резервных копий используется direct-строка. Настройки пула `4 / 0 / 30s` и отсутствие `METRICS_PORT` позволяют базе засыпать при простое.
 
-Для получения курсов API подключен также к исходящей `egress`-сети без публикации порта. PostgreSQL остается только в приватной сети, публичный HTTP/HTTPS принимает Caddy. VPS должен разрешать DNS и исходящий HTTPS к `api.frankfurter.dev`; без этого остаются только допустимые cached-курсы / явно неполный портфель. `/readyz` проверяет PostgreSQL и не проверяет доступность Frankfurter.
+### Мониторинг и альтернативный VPS
 
-API доверяет forwarded-заголовкам только от фиксированного IP Caddy. При конфликте `172.30.50.0/24` добавьте согласованные `PRIVATE_NETWORK_SUBNET` и `CADDY_PRIVATE_IP`: IP должен принадлежать подсети.
+[Free API monitoring](.github/workflows/free-monitor.yml) проверяет HTTPS, срок сертификата, `/healthz`, `/readyz` и свежесть успешной резервной копии **четыре раза в сутки**. Результат доступен в GitHub Actions. Частые проверки не держат Neon постоянно активным. Бесплатные тарифы имеют квоты и не дают круглосуточную гарантию доступности.
 
-### Обновление на VPS
-
-Из корня клона. Сделайте backup, затем:
-
-~~~sh
-git pull --ff-only origin main
-docker compose --env-file .env.production -f infra/compose.production.yaml build
-docker compose --env-file .env.production -f infra/compose.production.yaml stop caddy api
-docker compose --env-file .env.production -f infra/compose.production.yaml run --rm migrate
-# Только после успешной миграции:
-docker compose --env-file .env.production -f infra/compose.production.yaml up -d api caddy
-curl --fail https://api.your-domain.com/readyz
-~~~
-
-База остается запущенной. При ошибке миграции сначала исправьте ее. CI не выполняет автоматический deploy; push в GitHub сам по себе не создает публичный сервер.
+Для отдельного Ubuntu VPS подготовлен [production runbook](docs/PRODUCTION.md): Caddy, PostgreSQL, приватный Prometheus, Grafana и Alertmanager, автоматический restic backup в S3-совместимое хранилище и изолированная проверка восстановления. [Production Compose](infra/compose.production.yaml) запускается отдельно от локального файла. Секреты хранятся в `secrets/`; перед миграциями скрипт требует проверенную резервную копию. Мониторинг доступен через SSH-туннель, а наружу открываются только HTTP/HTTPS. Этот вариант требует своего VPS и не включён в бесплатное размещение.
 
 ### Signed APK / AAB
 
@@ -796,7 +746,11 @@ Release package: `com.moneyflow.app`; HTTP запрещен. Перед публ
 <a id="backups"></a>
 ## 💾 Backup и восстановление
 
-Автоматический backup, шифрование архивов и их отправка вне VPS **не настроены**. Ниже ручной сценарий. Важные копии храните отдельно от сервера и проверяйте восстановление.
+Для бесплатного сервера [Free encrypted database backup](.github/workflows/free-backup.yml) запускается ежедневно в **03:17 UTC**. Он получает согласованный PostgreSQL snapshot, восстанавливает dump в отдельную PostgreSQL, сравнивает отпечатки таблиц и шифрует архив через **age**. В закрытом **draft release** GitHub сохраняются последние **7 копий за 7 дней**, каждая до 20 MiB. Черновик не публикуется; автоматизация не использует платное хранилище артефактов Actions для backup.
+
+Приватный ключ восстановления хранится отдельно от GitHub и Vercel. Публичный ключ задаётся переменной `MONEYFLOW_BACKUP_AGE_RECIPIENT`; URI базы — секретом `MONEYFLOW_BACKUP_DATABASE_URL`. Инструкции скачивания, проверки SHA-256, расшифровки и восстановления находятся в [FREE_HOSTING.md](docs/FREE_HOSTING.md). Расписание GitHub может задерживаться и отключается при длительной неактивности репозитория; монитор проверяет возраст фактической копии.
+
+Ниже сохранён ручной сценарий для **локальной** базы. Для VPS используется отдельный [restic-сценарий](infra/backup/README.md).
 
 Dump создается в контейнере, затем копируется на компьютер: бинарный архив не проходит через `>` в Windows PowerShell.
 

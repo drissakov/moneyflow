@@ -1,0 +1,43 @@
+name: Backup restore checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/backup/**'
+      - 'backend/internal/migrations/sql/**'
+      - '.github/workflows/backup-checks.yml'
+      - '.github/workflows/free-backup.yml'
+  pull_request:
+    paths:
+      - 'infra/backup/**'
+      - 'backend/internal/migrations/sql/**'
+      - '.github/workflows/backup-checks.yml'
+      - '.github/workflows/free-backup.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  encryption-and-restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Check shell syntax and connection/storage helpers
+        run: |
+          for file in infra/backup/*.sh infra/backup/tests/*.sh; do bash -n "$file"; done
+          python3 -B -m unittest discover -s infra/backup/tests -p 'test_*.py' -v
+      - name: Test real age encryption, decryption and PostgreSQL restore
+        run: docker compose -f infra/backup/tests/compose.free.yaml up --build --abort-on-container-exit --exit-code-from test
+      - name: Clean free fixture
+        if: always()
+        run: docker compose -f infra/backup/tests/compose.free.yaml down --volumes
+      - name: Test real restic encryption, restore, locking and failure paths
+        run: docker compose -f infra/backup/tests/compose.yaml up --build --abort-on-container-exit --exit-code-from test
+      - name: Clean restic fixture
+        if: always()
+        run: docker compose -f infra/backup/tests/compose.yaml down --volumes

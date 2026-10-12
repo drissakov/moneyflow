@@ -14,6 +14,7 @@ import (
 	"github.com/drissakov/moneyflow/backend/internal/database"
 	"github.com/drissakov/moneyflow/backend/internal/fx"
 	"github.com/drissakov/moneyflow/backend/internal/httpapi"
+	"github.com/drissakov/moneyflow/backend/internal/observability"
 	"github.com/drissakov/moneyflow/backend/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -34,7 +35,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	gin.SetMode(gin.ReleaseMode)
-	db, err := database.Open(cfg.DatabaseURL)
+	db, err := database.OpenWithPool(cfg.DatabaseURL, cfg.DatabaseMaxOpen, cfg.DatabaseMaxIdle, cfg.DatabaseMaxIdleTime)
 	if err != nil {
 		return errors.New("database connection failed")
 	}
@@ -51,7 +52,14 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return errors.New("authentication initialization failed")
 	}
-	router, err := httpapi.New(s, httpapi.Options{Logger: logger, TrustedProxies: cfg.TrustedProxies})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	var metrics *observability.Metrics
+	if cfg.MetricsPort != "" {
+		metrics = observability.New(sqlDB)
+		go metrics.ProbeDatabase(ctx)
+	}
+	router, err := httpapi.New(s, httpapi.Options{Logger: logger, TrustedProxies: cfg.TrustedProxies, Metrics: metrics})
 	if err != nil {
 		return errors.New("invalid proxy configuration")
 	}
@@ -60,25 +68,38 @@ func run(logger *slog.Logger) error {
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second,
 		WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 * 1024,
 	}
-	stopped := make(chan error, 1)
-	go func() { stopped <- server.ListenAndServe() }()
-	logger.Info("server started", "port", cfg.Port)
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	servers := []*http.Server{server}
+	if metrics != nil {
+		servers = append(servers, &http.Server{
+			Addr: ":" + cfg.MetricsPort, Handler: metrics.Handler(),
+			ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
+			WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 * 1024,
+		})
+	}
+	stopped := make(chan error, len(servers))
+	for _, listener := range servers {
+		go func() { stopped <- listener.ListenAndServe() }()
+	}
+	logger.Info("server started", "port", cfg.Port, "metrics_port", cfg.MetricsPort)
+	var result error
 	select {
 	case err := <-stopped:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+		if !errors.Is(err, http.ErrServerClosed) {
+			result = errors.New("HTTP listener failed")
 		}
-		return errors.New("HTTP listener failed")
 	case <-ctx.Done():
 		logger.Info("server shutting down")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			server.Close()
-			return errors.New("graceful shutdown timed out")
-		}
-		return nil
 	}
+	stop()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, listener := range servers {
+		if err := listener.Shutdown(shutdownCtx); err != nil {
+			listener.Close()
+			if result == nil {
+				result = errors.New("graceful shutdown timed out")
+			}
+		}
+	}
+	return result
 }

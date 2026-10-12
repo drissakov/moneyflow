@@ -1,0 +1,129 @@
+groups:
+  - name: moneyflow-api
+    rules:
+      - alert: MoneyFlowAPIDown
+        expr: up{job="moneyflow-api"} == 0 or absent(up{job="moneyflow-api"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: MoneyFlow API metrics are unreachable
+          description: Check the API container, listener and private network. The public HTTPS health check should also be monitored outside this VPS.
+      - alert: MoneyFlowDatabaseNotReady
+        expr: moneyflow_database_ready{job="moneyflow-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: MoneyFlow cannot connect to PostgreSQL
+          description: The cached database probe has failed for at least two minutes. Check database health and credentials without logging the connection string.
+      - alert: MoneyFlowDatabaseProbeStale
+        expr: time() - moneyflow_database_probe_timestamp_seconds{job="moneyflow-api"} > 60
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Database readiness probe stopped updating
+      - alert: MoneyFlowHighErrorRate
+        expr: |
+          (sum(rate(moneyflow_http_requests_total{job="moneyflow-api",route!~"/(healthz|readyz)",status=~"5.."}[5m]))
+          / sum(rate(moneyflow_http_requests_total{job="moneyflow-api",route!~"/(healthz|readyz)"}[5m])) > 0.05)
+          and sum(rate(moneyflow_http_requests_total{job="moneyflow-api",route!~"/(healthz|readyz)"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 5% of MoneyFlow requests fail
+          description: Error rate exceeds 5% with more than six requests per minute. Review status and route metrics and sanitized API logs.
+      - alert: MoneyFlowHighLatency
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(moneyflow_http_request_duration_seconds_bucket{job="moneyflow-api",route!~"/(healthz|readyz)"}[5m]))) > 1
+          and sum(rate(moneyflow_http_request_duration_seconds_count{job="moneyflow-api",route!~"/(healthz|readyz)"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: MoneyFlow p95 request latency exceeds one second
+
+  - name: moneyflow-backups
+    rules:
+      - alert: MoneyFlowBackupExporterDown
+        expr: up{job="moneyflow-backups"} == 0 or absent(up{job="moneyflow-backups"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backup monitoring is unreachable
+      - alert: MoneyFlowBackupMetricsMissing
+        expr: absent(moneyflow_backup_last_success_timestamp_seconds{job="moneyflow-backups"})
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Backup scheduler has not published its metrics
+      - alert: MoneyFlowBackupFailed
+        expr: moneyflow_backup_last_run_success{job="moneyflow-backups"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Last encrypted backup failed or has never succeeded
+      - alert: MoneyFlowBackupTooOld
+        expr: time() - moneyflow_backup_last_success_timestamp_seconds{job="moneyflow-backups"} > 93600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: No successful encrypted backup in 26 hours
+      - alert: MoneyFlowBackupIntegrityFailed
+        expr: moneyflow_backup_check_last_run_success{job="moneyflow-backups"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Last backup repository integrity check failed
+      - alert: MoneyFlowBackupIntegrityTooOld
+        expr: time() - moneyflow_backup_check_last_success_timestamp_seconds{job="moneyflow-backups"} > 93600 or absent(moneyflow_backup_check_last_success_timestamp_seconds{job="moneyflow-backups"})
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: No successful backup integrity check in 26 hours
+      - alert: MoneyFlowRestoreVerificationFailed
+        expr: moneyflow_backup_restore_last_run_success{job="moneyflow-backups"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Last isolated backup restore verification failed
+      - alert: MoneyFlowRestoreVerificationTooOld
+        expr: time() - moneyflow_backup_restore_last_success_timestamp_seconds{job="moneyflow-backups"} > 93600 or absent(moneyflow_backup_restore_last_success_timestamp_seconds{job="moneyflow-backups"})
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: No successful backup restore verification in 26 hours
+      - alert: MoneyFlowBackupMetricsInvalid
+        expr: node_textfile_scrape_error{job="moneyflow-backups"} == 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Backup metrics file cannot be parsed
+
+  - name: moneyflow-monitoring
+    rules:
+      - alert: MoneyFlowAlertmanagerDown
+        expr: up{job="alertmanager"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Alertmanager is unreachable
+      - alert: MoneyFlowAlertDeliveryFailed
+        expr: increase(alertmanager_notifications_failed_total[10m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Alertmanager notification delivery failed

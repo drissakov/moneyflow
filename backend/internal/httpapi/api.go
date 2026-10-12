@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drissakov/moneyflow/backend/internal/observability"
 	"github.com/drissakov/moneyflow/backend/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -22,6 +23,7 @@ const maxBodyBytes = 16 * 1024
 type Options struct {
 	Logger         *slog.Logger
 	TrustedProxies []string
+	Metrics        *observability.Metrics
 }
 
 type API struct {
@@ -39,6 +41,9 @@ func New(s *service.Service, opts Options) (*gin.Engine, error) {
 	router.HandleMethodNotAllowed = true
 	if err := router.SetTrustedProxies(opts.TrustedProxies); err != nil {
 		return nil, err
+	}
+	if opts.Metrics != nil {
+		router.Use(opts.Metrics.Middleware())
 	}
 	router.Use(a.requestContext(), gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, _ any) {
 		logger.Error("request panicked", "method", c.Request.Method, "path", c.FullPath())
