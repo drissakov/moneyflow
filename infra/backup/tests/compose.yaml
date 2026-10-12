@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: source-test-password
       POSTGRES_DB: moneyflow_fixture
     tmpfs:
-      - /var/lib/postgresql/data:size=256m,mode=0700
+      - /var/lib/postgresql/data:size=256m,mode=0700,uid=70,gid=70
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U source_admin -d moneyflow_fixture"]
       interval: 2s
@@ -20,7 +20,7 @@ services:
       POSTGRES_USER: restore_admin
       POSTGRES_PASSWORD: restore-test-password
     tmpfs:
-      - /var/lib/postgresql/data:size=256m,mode=0700
+      - /var/lib/postgresql/data:size=256m,mode=0700,uid=70,gid=70
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U restore_admin -d postgres"]
       interval: 2s

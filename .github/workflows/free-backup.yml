@@ -51,7 +51,7 @@ jobs:
           docker build -f infra/backup/Dockerfile.free -t moneyflow-free-backup .
           docker network create moneyflow-backup-verify >/dev/null
           docker run -d --name moneyflow-backup-verify-db --network moneyflow-backup-verify --network-alias restore-db \
-            --tmpfs /var/lib/postgresql:rw,size=512m,mode=0700 \
+            --tmpfs /var/lib/postgresql:rw,size=512m,mode=0700,uid=70,gid=70 \
             -v "$backup_temp/restore-secrets:/run/secrets:ro" \
             -e POSTGRES_USER=moneyflow_verify -e POSTGRES_PASSWORD_FILE=/run/secrets/restore_db_password \
             postgres:18.6-alpine3.23 >/dev/null
