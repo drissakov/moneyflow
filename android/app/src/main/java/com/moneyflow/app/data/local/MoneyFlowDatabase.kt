@@ -12,6 +12,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.moneyflow.app.data.domain.Account
 import com.moneyflow.app.data.domain.MoneyTransaction
+import com.moneyflow.app.data.domain.Category
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "accounts", primaryKeys = ["userId", "id"])
@@ -44,12 +45,30 @@ data class TransactionEntity(
     val note: String,
     val occurredAt: String,
     val createdAt: String,
+    val categoryId: String? = null,
 ) {
-    fun toDomain() = MoneyTransaction(id, accountId, kind, amountMinor, currency, note, occurredAt, createdAt)
+    fun toDomain() = MoneyTransaction(id, accountId, kind, amountMinor, currency, note, occurredAt, createdAt, categoryId)
     companion object {
         fun from(userId: String, transaction: MoneyTransaction) = TransactionEntity(
             userId, transaction.id, transaction.accountId, transaction.kind, transaction.amountMinor,
-            transaction.currency, transaction.note, transaction.occurredAt, transaction.createdAt,
+            transaction.currency, transaction.note, transaction.occurredAt, transaction.createdAt, transaction.categoryId,
+        )
+    }
+}
+
+@Entity(tableName = "categories", primaryKeys = ["userId", "id"], indices = [Index("userId", "parentId")])
+data class CategoryEntity(
+    val userId: String,
+    val id: String,
+    val kind: String,
+    val name: String,
+    val parentId: String?,
+    val isDefault: Boolean,
+) {
+    fun toDomain() = Category(id, kind, name, parentId, isDefault)
+    companion object {
+        fun from(userId: String, category: Category) = CategoryEntity(
+            userId, category.id, category.kind, category.name, category.parentId, category.isDefault,
         )
     }
 }
@@ -67,6 +86,18 @@ data class PortfolioSnapshotEntity(
 
 @Dao
 interface MoneyFlowDao {
+    @Query("SELECT * FROM categories WHERE userId = :userId ORDER BY kind ASC, name COLLATE NOCASE ASC, id ASC")
+    fun observeCategories(userId: String): Flow<List<CategoryEntity>>
+
+    @Query("SELECT * FROM categories WHERE userId = :userId AND id = :categoryId LIMIT 1")
+    suspend fun category(userId: String, categoryId: String): CategoryEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putCategories(categories: List<CategoryEntity>)
+
+    @Query("DELETE FROM categories WHERE userId = :userId")
+    suspend fun deleteCategories(userId: String)
+
     @Query("SELECT * FROM fx_preferences WHERE userId = :userId LIMIT 1")
     fun observePreferences(userId: String): Flow<FxPreferencesEntity?>
 
@@ -111,7 +142,7 @@ interface MoneyFlowDao {
 }
 
 @Database(entities = [AccountEntity::class, TransactionEntity::class, FxPreferencesEntity::class,
-    PortfolioSnapshotEntity::class], version = 2, exportSchema = true)
+    PortfolioSnapshotEntity::class, CategoryEntity::class], version = 3, exportSchema = true)
 abstract class MoneyFlowDatabase : RoomDatabase() {
     abstract fun dao(): MoneyFlowDao
 
@@ -120,6 +151,13 @@ abstract class MoneyFlowDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `fx_preferences` (`userId` TEXT NOT NULL, `baseCurrency` TEXT NOT NULL, `pendingSync` INTEGER NOT NULL, PRIMARY KEY(`userId`))")
                 db.execSQL("CREATE TABLE IF NOT EXISTS `portfolio_snapshots` (`userId` TEXT NOT NULL, `baseCurrency` TEXT NOT NULL, `payload` TEXT NOT NULL, `receivedAt` TEXT NOT NULL, PRIMARY KEY(`userId`, `baseCurrency`))")
+            }
+        }
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `transactions` ADD COLUMN `categoryId` TEXT")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `categories` (`userId` TEXT NOT NULL, `id` TEXT NOT NULL, `kind` TEXT NOT NULL, `name` TEXT NOT NULL, `parentId` TEXT, `isDefault` INTEGER NOT NULL, PRIMARY KEY(`userId`, `id`))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_categories_userId_parentId` ON `categories` (`userId`, `parentId`)")
             }
         }
     }

@@ -89,7 +89,7 @@ class FxRepositoryTest {
                     return PortfolioDto("KZT", "Frankfurter", null, false, true, "100", "100", emptyList(),
                         listOf(PortfolioAccountDto(accountId, "Cash", "KZT", "100", "100", "1", null)))
                 }
-                override suspend fun createTransaction(key: String, body: CreateTransactionRequest) = TransactionDto(
+                override suspend fun createTransaction(key: String, body: CreateTransactionRequest, authorization: String?) = TransactionDto(
                     "ee7d2d31-7369-4759-8125-f9d3967ded86", body.accountId, body.kind, body.amountMinor,
                     "KZT", body.note, body.occurredAt, timestamp)
             }
@@ -122,7 +122,11 @@ class FxRepositoryTest {
         override suspend fun accounts(): AccountsResponse = error("Unused API")
         override suspend fun createAccount(body: CreateAccountRequest): AccountDto = error("Unused API")
         override suspend fun transactions(accountId: String, limit: Int): TransactionsResponse = error("Unused API")
-        override suspend fun createTransaction(key: String, body: CreateTransactionRequest): TransactionDto = error("Unused API")
+        override suspend fun createTransaction(key: String, body: CreateTransactionRequest, authorization: String?): TransactionDto = error("Unused API")
+        override suspend fun categories(authorization: String): CategoriesResponse = error("Unused API")
+        override suspend fun createCategory(body: CreateCategoryRequest, authorization: String): CategoryDto = error("Unused API")
+        override suspend fun setTransactionCategory(transactionId: String, body: SetTransactionCategoryRequest, authorization: String): TransactionDto = error("Unused API")
+        override suspend fun analytics(month: String, currency: String, timezone: String, authorization: String): MonthlyAnalyticsDto = error("Unused API")
         override suspend fun currencies(authorization: String): CurrencyCatalogueDto = error("Unused API")
         override suspend fun preferences(authorization: String): PreferencesDto = error("Unused API")
         override suspend fun setPreferences(body: PreferencesDto, authorization: String): PreferencesDto = error("Unused API")

@@ -5,11 +5,14 @@ import com.google.gson.Gson
 import com.moneyflow.app.data.domain.Account
 import com.moneyflow.app.data.domain.MoneyTransaction
 import com.moneyflow.app.data.domain.User
+import com.moneyflow.app.data.domain.Category
+import com.moneyflow.app.data.domain.MonthlyAnalytics
 import com.moneyflow.app.data.local.AccountEntity
 import com.moneyflow.app.data.local.MoneyFlowDatabase
 import com.moneyflow.app.data.local.TransactionEntity
 import com.moneyflow.app.data.local.FxPreferencesEntity
 import com.moneyflow.app.data.local.PortfolioSnapshotEntity
+import com.moneyflow.app.data.local.CategoryEntity
 import com.moneyflow.app.data.remote.AuthResponse
 import com.moneyflow.app.data.remote.CreateAccountRequest
 import com.moneyflow.app.data.remote.CreateTransactionRequest
@@ -24,6 +27,9 @@ import com.moneyflow.app.data.remote.ConvertRequest
 import com.moneyflow.app.data.remote.CurrencyCatalogueDto
 import com.moneyflow.app.data.remote.PortfolioDto
 import com.moneyflow.app.data.remote.PreferencesDto
+import com.moneyflow.app.data.remote.CreateCategoryRequest
+import com.moneyflow.app.data.remote.SetTransactionCategoryRequest
+import com.moneyflow.app.data.remote.normalizeCategoryName
 import com.moneyflow.app.data.domain.SupportedCurrency
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -39,6 +45,8 @@ import retrofit2.HttpException
 import java.util.Locale
 import java.util.UUID
 import java.time.Instant
+import java.time.YearMonth
+import java.time.ZoneId
 
 data class CachedPortfolio(val portfolio: PortfolioDto, val receivedAt: Instant)
 
@@ -49,6 +57,7 @@ class MoneyFlowRepository(
 ) {
     private val mutex = Mutex()
     private val preferenceSyncMutex = Mutex()
+    private val categorySyncMutex = Mutex()
     private var portfolioRevision = 0L
     private val _session = MutableStateFlow(store.readSession())
     val session: StateFlow<Session?> = _session.asStateFlow()
@@ -62,6 +71,87 @@ class MoneyFlowRepository(
 
     fun observeTransactions(userId: String, accountId: String): Flow<List<MoneyTransaction>> =
         dao.observeTransactions(userId, accountId).map { rows -> rows.map(TransactionEntity::toDomain) }
+
+    fun observeCategories(userId: String): Flow<List<Category>> =
+        dao.observeCategories(userId).map { rows -> rows.map(CategoryEntity::toDomain) }
+
+    suspend fun refreshCategories() {
+        val current = requireSession()
+        categorySyncMutex.withLock {
+            check(isCurrentSession(current)) { "Сессия изменилась" }
+            val categories = api.categories("Bearer ${current.token}").toDomain()
+            mutex.withLock {
+                check(isCurrentSession(current)) { "Сессия изменилась" }
+                database.withTransaction {
+                    dao.deleteCategories(current.user.id)
+                    dao.putCategories(categories.map { CategoryEntity.from(current.user.id, it) })
+                }
+            }
+        }
+    }
+
+    suspend fun createCategory(request: CreateCategoryRequest): Category {
+        val normalized = request.copy(name = normalizeCategoryName(request.name))
+        normalized.validate()
+        val current = requireSession()
+        return categorySyncMutex.withLock {
+            check(isCurrentSession(current)) { "Сессия изменилась" }
+            normalized.parentId?.let { parentId ->
+                val parent = mutex.withLock {
+                    check(isCurrentSession(current)) { "Сессия изменилась" }
+                    dao.category(current.user.id, parentId)
+                }
+                require(parent?.kind == "expense" && parent.parentId == null) { "Выберите основную категорию расходов" }
+            }
+            val category = api.createCategory(normalized, "Bearer ${current.token}").toDomain()
+            require(category.kind == normalized.kind && category.name == normalized.name && category.parentId == normalized.parentId &&
+                !category.isDefault) { "Ответ сервера не соответствует создаваемой категории" }
+            mutex.withLock {
+                check(isCurrentSession(current)) { "Сессия изменилась" }
+                dao.putCategories(listOf(CategoryEntity.from(current.user.id, category)))
+            }
+            category
+        }
+    }
+
+    suspend fun setTransactionCategory(transaction: MoneyTransaction, categoryId: String?): MoneyTransaction {
+        validateUuid(transaction.id)
+        val current = requireSession()
+        validateTransactionCategory(current, transaction.kind, categoryId)
+        val result = api.setTransactionCategory(transaction.id, SetTransactionCategoryRequest(categoryId),
+            "Bearer ${current.token}").toDomain()
+        require(result.categoryId == categoryId && result.copy(categoryId = transaction.categoryId) == transaction) {
+            "Ответ сервера изменил финансовые данные операции"
+        }
+        mutex.withLock {
+            check(isCurrentSession(current)) { "Сессия изменилась" }
+            dao.putTransactions(listOf(TransactionEntity.from(current.user.id, result)))
+        }
+        return result
+    }
+
+    suspend fun fetchAnalytics(month: String, currency: String, timezone: String): MonthlyAnalytics {
+        require(month.matches(Regex("\\d{4}-\\d{2}"))) { "Выберите месяц" }
+        YearMonth.parse(month)
+        SupportedCurrency.fromCode(currency)
+        ZoneId.of(timezone)
+        val current = requireSession()
+        val result = api.analytics(month, currency, timezone, "Bearer ${current.token}")
+            .toDomain(month, currency, timezone)
+        check(isCurrentSession(current)) { "Сессия изменилась" }
+        return result
+    }
+
+    private suspend fun validateTransactionCategory(current: Session, kind: String, categoryId: String?) {
+        categoryId?.let { id ->
+            validateUuid(id)
+            val category = mutex.withLock {
+                check(isCurrentSession(current)) { "Сессия изменилась" }
+                dao.category(current.user.id, id)
+            }
+            require(category?.kind == kind) { "Выберите категорию подходящего типа" }
+        }
+    }
 
     fun observePreferences(userId: String): Flow<FxPreferencesEntity> = dao.observePreferences(userId).map {
         it?.takeIf { row -> runCatching { SupportedCurrency.fromCode(row.baseCurrency) }.isSuccess }
@@ -185,6 +275,7 @@ class MoneyFlowRepository(
                 dao.deleteAccounts(userId)
                 dao.deleteUserTransactions(userId)
                 dao.deletePortfolios(userId)
+                dao.deleteCategories(userId)
             }
         }
     }
@@ -232,9 +323,13 @@ class MoneyFlowRepository(
     }
 
     suspend fun createTransaction(body: CreateTransactionRequest): MoneyTransaction {
-        val userId = requireUserId()
+        body.validate()
+        val current = requireSession()
+        val userId = current.user.id
+        validateTransactionCategory(current, body.kind, body.categoryId)
         val pending = withContext(Dispatchers.IO) {
             mutex.withLock {
+                check(isCurrentSession(current)) { "Сессия изменилась" }
                 val existing = store.readPending(userId)
                 require(existing == null || existing.body == body) {
                     "Сначала подтвердите предыдущую операцию кнопкой «Повторить»"
@@ -255,8 +350,10 @@ class MoneyFlowRepository(
     }
 
     private suspend fun submitPending(request: PendingTransaction): MoneyTransaction {
+        val current = requireSession()
+        require(request.userId == current.user.id) { "Ожидающая операция принадлежит другому пользователю" }
         val transaction = try {
-            api.createTransaction(request.key, request.body).toDomain().also {
+            api.createTransaction(request.key, request.body, "Bearer ${current.token}").toDomain().also {
                 require(matchesTransactionRequest(it, request.body)) {
                     "Ответ сервера не соответствует ожидающей операции. Повторите отправку"
                 }
@@ -281,16 +378,15 @@ class MoneyFlowRepository(
         }
         withContext(Dispatchers.IO) {
             mutex.withLock {
-                if (_session.value?.user?.id == request.userId) {
-                    database.withTransaction {
-                        dao.putTransactions(listOf(TransactionEntity.from(request.userId, transaction)))
-                        portfolioRevision++
-                        dao.deletePortfolios(request.userId)
-                    }
-                    if (store.readPending(request.userId)?.key == request.key) store.clearPending(request.userId)
-                    if (_pending.value?.userId == request.userId && _pending.value?.key == request.key) {
-                        _pending.value = null
-                    }
+                check(isCurrentSession(current)) { "Сессия изменилась" }
+                database.withTransaction {
+                    dao.putTransactions(listOf(TransactionEntity.from(request.userId, transaction)))
+                    portfolioRevision++
+                    dao.deletePortfolios(request.userId)
+                }
+                if (store.readPending(request.userId)?.key == request.key) store.clearPending(request.userId)
+                if (_pending.value?.userId == request.userId && _pending.value?.key == request.key) {
+                    _pending.value = null
                 }
             }
         }

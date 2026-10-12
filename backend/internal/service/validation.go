@@ -92,6 +92,8 @@ type CreateTransactionInput struct {
 	AmountText string    `json:"amount_minor"`
 	Note       string    `json:"note"`
 	OccurredAt time.Time `json:"occurred_at"`
+	// Omit a nil category to preserve fingerprints of pre-category requests.
+	CategoryID *string `json:"category_id,omitempty"`
 }
 
 func ValidateTransaction(accountID, kind, amount, note, occurred string) (CreateTransactionInput, error) {

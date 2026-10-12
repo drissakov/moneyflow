@@ -20,4 +20,5 @@ data class MoneyTransaction(
     val note: String,
     val occurredAt: String,
     val createdAt: String,
+    val categoryId: String? = null,
 )

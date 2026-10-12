@@ -59,4 +59,50 @@ class DatabaseMigrationTest {
             assertNotNull(dao.observePortfolio("user-b", "USD").first())
         } finally { database.close() }
     }
+
+    @Test fun migrateTwoToThreePreservesOldTransactionsWithNoCategoryAndFxData() {
+        val name = "moneyflow-categories-migration-test"
+        helper.createDatabase(name, 2).apply {
+            execSQL("INSERT INTO accounts VALUES ('user-a','account-a','Cash','KZT',500,400,'2026-10-09T00:00:00Z')")
+            execSQL("INSERT INTO transactions VALUES ('user-a','transaction-a','account-a','expense',100,'KZT','Coffee','2026-10-09T00:00:00Z','2026-10-09T00:00:00Z')")
+            execSQL("INSERT INTO fx_preferences VALUES ('user-a','USD',1)")
+            execSQL("INSERT INTO portfolio_snapshots VALUES ('user-a','USD','snapshot','2026-10-09T00:00:00Z')")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 3, true, MoneyFlowDatabase.MIGRATION_2_3).apply {
+            query("SELECT amountMinor,note,categoryId FROM transactions WHERE userId='user-a'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(100L, it.getLong(0))
+                assertEquals("Coffee", it.getString(1))
+                assertTrue(it.isNull(2))
+            }
+            query("SELECT baseCurrency,pendingSync FROM fx_preferences WHERE userId='user-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals("USD", it.getString(0)); assertEquals(1, it.getInt(1))
+            }
+            query("SELECT payload FROM portfolio_snapshots WHERE userId='user-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals("snapshot", it.getString(0))
+            }
+            close()
+        }
+    }
+
+    @Test fun categoriesAreCachedAndDeletedPerUser() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(InstrumentationRegistry.getInstrumentation().targetContext,
+            MoneyFlowDatabase::class.java).build()
+        try {
+            val dao = database.dao()
+            dao.putCategories(listOf(
+                CategoryEntity("user-a", "shared-id", "expense", "Продукты", null, true),
+                CategoryEntity("user-b", "shared-id", "expense", "Продукты", null, true),
+                CategoryEntity("user-a", "custom-id", "expense", "Кофе", "shared-id", false),
+            ))
+            assertEquals(2, dao.observeCategories("user-a").first().size)
+            assertEquals(1, dao.observeCategories("user-b").first().size)
+            assertEquals("shared-id", dao.category("user-a", "custom-id")?.parentId)
+            assertNull(dao.category("user-b", "custom-id"))
+            dao.deleteCategories("user-a")
+            assertTrue(dao.observeCategories("user-a").first().isEmpty())
+            assertEquals(1, dao.observeCategories("user-b").first().size)
+        } finally { database.close() }
+    }
 }

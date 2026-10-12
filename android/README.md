@@ -35,9 +35,28 @@ With an emulator or device connected, run migration/isolation/concurrency tests:
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-Tests use dedicated databases and separate preferences, preserving the user's app
-database and login session. Room migration 1 → 2 adds preferences/portfolio caches
-without deleting existing accounts or transactions.
+Tests use dedicated databases and separate preferences. Gradle's connected test
+runner can uninstall the debug app after testing, removing its local cache and
+login session; use a test emulator, then reinstall the APK and sign in again.
+Server accounts and transactions are preserved. Room migration 1 → 2 adds
+preferences/portfolio caches without deleting existing accounts or transactions.
+Migration 2 → 3 adds the user-scoped category cache and a nullable transaction
+category ID. Existing transactions remain uncategorized until assigned by the user.
+
+## Categories and monthly analytics
+
+Expenses support standard/custom categories and one level of subcategories.
+Income uses flat standard/custom categories. Create a category in the Categories
+screen or while entering a transaction; select a transaction to change its category.
+The server must have migration `003_categories_analytics.sql` applied.
+
+The Analytics screen shows a monthly pie chart, amounts and percentages for
+expenses or income. Expense roots can be expanded into subcategories, with direct
+root spending shown separately. Reports use the device timezone and include all
+server transactions, rather than the 50 cached rows shown in the account history.
+Choose the native account currency: currencies are reported separately without FX
+conversion, and opening balances are excluded. Categories are cached per user;
+fetching a report and creating a category require a server connection.
 
 ## Release configuration
 

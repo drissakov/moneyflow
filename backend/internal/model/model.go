@@ -38,6 +38,17 @@ type Transaction struct {
 	Note        string
 	OccurredAt  time.Time
 	CreatedAt   time.Time
+	CategoryID  *string `gorm:"type:uuid"`
+}
+
+type Category struct {
+	ID        string  `gorm:"type:uuid;primaryKey"`
+	UserID    *string `gorm:"type:uuid"`
+	Kind      string
+	Name      string
+	ParentID  *string `gorm:"type:uuid"`
+	IsDefault bool
+	CreatedAt time.Time
 }
 
 type IdempotencyRecord struct {

@@ -39,6 +39,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -82,7 +84,9 @@ import java.util.Locale
 fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(state.session?.user?.id) { dialog = null }
+    var screen by rememberSaveable { mutableStateOf("overview") }
+    var categoryTransactionId by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.session?.user?.id) { dialog = null; screen = "overview"; categoryTransactionId = null }
 
     Scaffold(
         modifier = Modifier.semantics { testTagsAsResourceId = true },
@@ -105,7 +109,13 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
                     )
                 }
                 if (state.session != null) {
-                    IconButton(onClick = viewModel::refresh, enabled = !state.refreshing && !state.working,
+                    IconButton(onClick = {
+                        when (screen) {
+                            "analytics" -> viewModel.refreshAnalytics()
+                            "categories" -> viewModel.refreshCategories()
+                            else -> viewModel.refresh()
+                        }
+                    }, enabled = !state.refreshing && !state.working && !state.analyticsLoading && !state.categoriesLoading,
                         modifier = Modifier.testTag("refresh")) {
                         Icon(Icons.Default.Refresh, contentDescription = "Обновить данные")
                     }
@@ -116,8 +126,17 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
                 }
             }
         },
+        bottomBar = {
+            if (state.session != null) NavigationBar {
+                listOf(Triple("overview", "Обзор", "◉"), Triple("analytics", "Аналитика", "◔"), Triple("categories", "Категории", "▦"))
+                    .forEach { (key, label, glyph) ->
+                        NavigationBarItem(selected = screen == key, onClick = { screen = key },
+                            icon = { Text(glyph, fontSize = 22.sp) }, label = { Text(label) }, modifier = Modifier.testTag("nav_$key"))
+                    }
+            }
+        },
         floatingActionButton = {
-            if (state.session != null && state.selectedAccount != null && state.pending == null) {
+            if (state.session != null && screen == "overview" && state.selectedAccount != null && state.pending == null) {
                 ExtendedFloatingActionButton(
                     onClick = { if (!state.working) { viewModel.clearMessages(); dialog = "transaction" } },
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -133,9 +152,15 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
             when {
                 state.starting -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 state.session == null -> AuthScreen(state, viewModel)
+                screen == "analytics" -> AnalyticsScreen(state, viewModel)
+                screen == "categories" -> CategoriesScreen(state, viewModel)
                 else -> Dashboard(state, viewModel,
                     onAddAccount = { viewModel.clearMessages(); dialog = "account" },
-                    onConverter = { viewModel.clearConversion(); dialog = "convert" })
+                    onConverter = { viewModel.clearConversion(); dialog = "convert" },
+                    onTransactionCategory = { transaction ->
+                        viewModel.clearMessages(); viewModel.clearCategoryMessages()
+                        categoryTransactionId = transaction.id; dialog = "assign_category"
+                    })
             }
         }
     }
@@ -143,6 +168,9 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
     when (dialog) {
         "account" -> AccountDialog(state, viewModel) { dialog = null }
         "transaction" -> state.selectedAccount?.let { account -> TransactionDialog(account, state, viewModel) { dialog = null } }
+        "assign_category" -> state.transactions.firstOrNull { it.id == categoryTransactionId }?.let { transaction ->
+            AssignCategoryDialog(transaction, state, viewModel) { dialog = null; categoryTransactionId = null }
+        }
         "convert" -> ConverterDialog(state, viewModel) { dialog = null }
         "logout" -> AlertDialog(
             onDismissRequest = { dialog = null },
@@ -218,7 +246,13 @@ private fun AuthScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel) {
 }
 
 @Composable
-private fun Dashboard(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, onAddAccount: () -> Unit, onConverter: () -> Unit) {
+private fun Dashboard(
+    state: MoneyFlowUiState,
+    viewModel: MoneyFlowViewModel,
+    onAddAccount: () -> Unit,
+    onConverter: () -> Unit,
+    onTransactionCategory: (MoneyTransaction) -> Unit,
+) {
     LazyColumn(
         modifier = Modifier.widthIn(max = 620.dp).fillMaxSize().testTag("dashboard"),
         contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 12.dp, bottom = 100.dp),
@@ -284,7 +318,9 @@ private fun Dashboard(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, on
             if (state.transactions.isEmpty()) item {
                 EmptyCard("Здесь появятся ваши записи", "Добавьте первый расход или доход. Баланс обновится после сохранения на сервере.")
             }
-            items(state.transactions, key = { it.id }) { transaction -> TransactionRow(transaction) }
+            items(state.transactions, key = { it.id }) { transaction ->
+                TransactionRow(transaction, state, onSelectCategory = { onTransactionCategory(transaction) })
+            }
         }
     }
 }
@@ -316,9 +352,11 @@ private fun BalanceCard(account: Account?, lastSyncedAt: Instant?, refreshing: B
 }
 
 @Composable
-private fun TransactionRow(transaction: MoneyTransaction) {
+private fun TransactionRow(transaction: MoneyTransaction, state: MoneyFlowUiState, onSelectCategory: () -> Unit) {
     val income = transaction.kind == "income"
-    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(onClick = onSelectCategory, enabled = !state.working,
+        modifier = Modifier.fillMaxWidth().testTag("transaction_${transaction.id}"),
+        shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(42.dp).clip(CircleShape).background(
@@ -332,6 +370,8 @@ private fun TransactionRow(transaction: MoneyTransaction) {
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(formatTime(transaction.occurredAt), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("${categoryPath(transaction.categoryId, state.categories)} ›", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("transaction_category_path_${transaction.id}"))
             }
             Spacer(Modifier.width(8.dp))
             Text("${if (income) "+" else "−"}${Money.format(transaction.amountMinor, transaction.currency)}",
@@ -402,29 +442,41 @@ private fun AccountDialog(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel
     )
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun TransactionDialog(account: Account, state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, dismiss: () -> Unit) {
     var kind by rememberSaveable { mutableStateOf("expense") }
     var amount by rememberSaveable { mutableStateOf("") }
     var note by rememberSaveable { mutableStateOf("") }
+    var categoryId by rememberSaveable { mutableStateOf<String?>(null) }
+    var creatingCategory by rememberSaveable { mutableStateOf(false) }
     val initialVersion = remember { state.mutationVersion }
     LaunchedEffect(state.mutationVersion) { if (state.mutationVersion != initialVersion) dismiss() }
     val pending = state.pending != null
     AlertDialog(
         onDismissRequest = { if (!state.working) dismiss() },
+        modifier = Modifier.semantics { testTagsAsResourceId = true },
         title = { Text("Добавить операцию") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("${account.name} · ${account.currency}", style = MaterialTheme.typography.titleSmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = kind == "expense", onClick = { kind = "expense" }, label = { Text("Расход") },
+                    FilterChip(selected = kind == "expense", onClick = { if (kind != "expense") categoryId = null; kind = "expense" }, label = { Text("Расход") },
                         enabled = !state.working && !pending, modifier = Modifier.testTag("kind_expense"))
-                    FilterChip(selected = kind == "income", onClick = { kind = "income" }, label = { Text("Доход") },
+                    FilterChip(selected = kind == "income", onClick = { if (kind != "income") categoryId = null; kind = "income" }, label = { Text("Доход") },
                         enabled = !state.working && !pending, modifier = Modifier.testTag("kind_income"))
                 }
                 OutlinedTextField(amount, { amount = it }, label = { Text("Сумма") }, suffix = { Text(account.currency) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), singleLine = true,
                     enabled = !state.working && !pending, modifier = Modifier.fillMaxWidth().testTag("transaction_amount"))
+                CategorySelector(state.categories, kind, categoryId, { categoryId = it },
+                    onCreate = { viewModel.clearCategoryMessages(); creatingCategory = true },
+                    enabled = !state.working && !pending && !state.categoryWorking)
+                if (state.categoriesLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (!creatingCategory) state.categoryError?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = viewModel::refreshCategories, enabled = !state.categoriesLoading) { Text("Загрузить категории") }
+                }
                 OutlinedTextField(note, { note = it }, label = { Text("Комментарий (необязательно)") }, minLines = 2, maxLines = 4,
                     enabled = !state.working && !pending, modifier = Modifier.fillMaxWidth().testTag("transaction_note"))
                 Text("Дата операции — сейчас. Баланс изменится после подтверждения сервером.",
@@ -436,13 +488,14 @@ private fun TransactionDialog(account: Account, state: MoneyFlowUiState, viewMod
         },
         confirmButton = {
             Button(onClick = {
-                if (pending) viewModel.retryPending() else viewModel.createTransaction(kind, amount, note)
-            }, enabled = !state.working, modifier = Modifier.testTag("transaction_submit")) {
+                if (pending) viewModel.retryPending() else viewModel.createTransaction(kind, amount, note, categoryId)
+            }, enabled = !state.working && !state.categoryWorking, modifier = Modifier.testTag("transaction_submit")) {
                 Text(if (state.working) "Сохраняем…" else if (pending) "Повторить" else "Сохранить")
             }
         },
-        dismissButton = { TextButton(onClick = dismiss, enabled = !state.working) { Text(if (pending) "Закрыть" else "Отмена") } },
+        dismissButton = { TextButton(onClick = dismiss, enabled = !state.working && !state.categoryWorking) { Text(if (pending) "Закрыть" else "Отмена") } },
     )
+    if (creatingCategory) CreateCategoryDialog(state, viewModel, kind, dismiss = { creatingCategory = false }, onCreated = { categoryId = it })
 }
 
 private fun formatTime(value: String): String = runCatching {

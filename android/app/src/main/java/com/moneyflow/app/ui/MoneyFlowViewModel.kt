@@ -9,6 +9,8 @@ import com.moneyflow.app.data.PendingTransaction
 import com.moneyflow.app.data.Session
 import com.moneyflow.app.data.CachedPortfolio
 import com.moneyflow.app.data.domain.Account
+import com.moneyflow.app.data.domain.Category
+import com.moneyflow.app.data.domain.MonthlyAnalytics
 import com.moneyflow.app.data.domain.Money
 import com.moneyflow.app.data.domain.MoneyTransaction
 import com.moneyflow.app.data.domain.SupportedCurrency
@@ -18,6 +20,8 @@ import com.moneyflow.app.data.remote.ErrorBody
 import com.moneyflow.app.data.remote.ConvertRequest
 import com.moneyflow.app.data.remote.ConversionDto
 import com.moneyflow.app.data.remote.PortfolioDto
+import com.moneyflow.app.data.remote.CreateCategoryRequest
+import com.moneyflow.app.data.remote.normalizeCategoryName
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
@@ -34,6 +38,8 @@ import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import java.io.IOException
 import java.time.Instant
+import java.time.YearMonth
+import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 
 data class MoneyFlowUiState(
@@ -60,6 +66,19 @@ data class MoneyFlowUiState(
     val conversion: ConversionDto? = null,
     val conversionWorking: Boolean = false,
     val conversionError: String? = null,
+    val categories: List<Category> = emptyList(),
+    val categoriesLoading: Boolean = false,
+    val categoryWorking: Boolean = false,
+    val categoryError: String? = null,
+    val categoryMutationVersion: Int = 0,
+    val lastCreatedCategoryId: String? = null,
+    val transactionCategoryVersion: Int = 0,
+    val analytics: MonthlyAnalytics? = null,
+    val analyticsMonth: String = YearMonth.now().toString(),
+    val analyticsCurrency: String = "KZT",
+    val analyticsTimezone: String = ZoneId.systemDefault().id,
+    val analyticsLoading: Boolean = false,
+    val analyticsError: String? = null,
 ) {
     val selectedAccount: Account? get() = accounts.firstOrNull { it.id == selectedAccountId }
     val refreshing: Boolean get() = refreshRequests > 0
@@ -77,6 +96,8 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
     private val accountSource = MutableStateFlow<List<Account>?>(null)
     private var conversionJob: Job? = null
     private var conversionGeneration = 0L
+    private var analyticsJob: Job? = null
+    private var analyticsGeneration = 0L
 
     init {
         viewModelScope.launch {
@@ -85,13 +106,28 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
                 base.value = "KZT"
                 accountSource.value = null
                 clearConversion()
+                analyticsGeneration++
+                analyticsJob?.cancel()
                 _state.update {
                     it.copy(starting = false, session = session, accounts = emptyList(),
+                        working = false,
                         selectedAccountId = null, transactions = emptyList(), lastSyncedAt = null,
                         accountsLoaded = false, baseCurrency = "KZT", basePreferencePending = false,
-                        cachedPortfolio = null, fxError = null, lastFxConfirmedAt = null)
+                        cachedPortfolio = null, fxError = null, lastFxConfirmedAt = null,
+                        categories = emptyList(), categoriesLoading = false, categoryWorking = false,
+                        categoryError = null, lastCreatedCategoryId = null,
+                        analytics = null, analyticsLoading = false, analyticsError = null)
                 }
                 if (session != null) coroutineScope {
+                    launch {
+                        repository.observeCategories(session.user.id).collect { categories ->
+                            if (repository.session.value?.token == session.token) {
+                                _state.update { it.copy(categories = categories) }
+                            }
+                        }
+                    }
+                    launch { categoriesRequest(session.token) { repository.refreshCategories() } }
+                    refreshAnalytics()
                     launch {
                         repository.observeAccounts(session.user.id).collect { accounts ->
                             val next = selected.value?.takeIf { id -> accounts.any { it.id == id } }
@@ -191,6 +227,8 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
             }
         }
         refreshFx()
+        refreshCategories()
+        refreshAnalytics()
     }
 
     fun createAccount(name: String, currency: SupportedCurrency, opening: String) = action {
@@ -206,29 +244,32 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
         refreshAfterWrite()
     }
 
-    fun createTransaction(kind: String, amount: String, note: String) = action {
+    fun createTransaction(kind: String, amount: String, note: String, categoryId: String? = null) = action {
+        val session = repository.session.value ?: throw IllegalStateException("Войдите в аккаунт")
         val account = state.value.selectedAccount ?: throw IllegalArgumentException("Выберите счёт")
         require(kind == "income" || kind == "expense")
         require(note.codePointCount(0, note.length) <= 500) { "Комментарий: не более 500 символов" }
         val minor = Money.parseMinor(amount, SupportedCurrency.fromCode(account.currency), positive = true)
         val body = CreateTransactionRequest(account.id, kind, minor.toString(), note.trim(),
-            Instant.now().truncatedTo(ChronoUnit.MICROS).toString())
+            Instant.now().truncatedTo(ChronoUnit.MICROS).toString(), categoryId)
         val pending = repository.pending.value
         // A retry from the form uses the original timestamp as well as the original idempotency key.
         val request = if (pending != null && pending.body.copy(occurredAt = body.occurredAt) == body) pending.body else body
         repository.createTransaction(request)
-        transactionSaved()
+        if (repository.session.value?.token == session.token) transactionSaved()
     }
 
     fun retryPending() = action {
+        val session = repository.session.value ?: throw IllegalStateException("Войдите в аккаунт")
         repository.retryPending()
-        transactionSaved()
+        if (repository.session.value?.token == session.token) transactionSaved()
     }
 
     private fun transactionSaved() {
         _state.update { it.copy(mutationVersion = it.mutationVersion + 1, notice = "Операция сохранена на сервере",
             cachedPortfolio = null, lastFxConfirmedAt = null) }
         refreshAfterWrite()
+        refreshAnalytics()
     }
 
     private fun refreshAfterWrite() {
@@ -249,6 +290,132 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
     }
 
     fun clearMessages() { _state.update { it.copy(error = null, notice = null) } }
+
+    fun refreshCategories() {
+        val session = repository.session.value ?: return
+        if (state.value.categoriesLoading) return
+        viewModelScope.launch { categoriesRequest(session.token) { repository.refreshCategories() } }
+    }
+
+    fun createCategory(kind: String, name: String, parentId: String? = null) {
+        if (state.value.categoryWorking) return
+        val session = repository.session.value ?: return
+        viewModelScope.launch {
+            if (repository.session.value?.token != session.token) return@launch
+            _state.update { it.copy(categoryWorking = true, categoryError = null, lastCreatedCategoryId = null) }
+            try {
+                val category = repository.createCategory(CreateCategoryRequest(kind, normalizeCategoryName(name), parentId))
+                if (repository.session.value?.token == session.token) {
+                    _state.update { it.copy(categoryMutationVersion = it.categoryMutationVersion + 1,
+                        lastCreatedCategoryId = category.id) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (repository.session.value?.token == session.token) {
+                    if (error is HttpException && error.code() == 401) handleError(error)
+                    else _state.update { it.copy(categoryError = categoryMessage(error)) }
+                }
+            } finally {
+                if (repository.session.value?.token == session.token) _state.update { it.copy(categoryWorking = false) }
+            }
+        }
+    }
+
+    fun clearCategoryMessages() { _state.update { it.copy(categoryError = null, lastCreatedCategoryId = null) } }
+
+    fun setTransactionCategory(transactionId: String, categoryId: String?) = action {
+        val session = repository.session.value ?: throw IllegalStateException("Войдите в аккаунт")
+        val transaction = state.value.transactions.firstOrNull { it.id == transactionId }
+            ?: throw IllegalArgumentException("Операция не найдена. Обновите данные")
+        repository.setTransactionCategory(transaction, categoryId)
+        if (repository.session.value?.token == session.token) {
+            _state.update { it.copy(transactionCategoryVersion = it.transactionCategoryVersion + 1,
+                notice = "Категория операции обновлена") }
+            refreshAnalytics()
+        }
+    }
+
+    fun setAnalyticsMonth(month: String) {
+        if (month == state.value.analyticsMonth) return
+        runCatching {
+            require(month.matches(Regex("\\d{4}-\\d{2}")))
+            YearMonth.parse(month)
+        }.getOrElse {
+            _state.update { state -> state.copy(analyticsError = "Выберите корректный месяц") }
+            return
+        }
+        _state.update { it.copy(analyticsMonth = month, analytics = null) }
+        refreshAnalytics()
+    }
+
+    fun setAnalyticsCurrency(currency: String) {
+        if (currency == state.value.analyticsCurrency) return
+        runCatching { SupportedCurrency.fromCode(currency) }.getOrElse { return }
+        _state.update { it.copy(analyticsCurrency = currency, analytics = null) }
+        refreshAnalytics()
+    }
+
+    fun refreshAnalytics() {
+        val session = repository.session.value ?: return
+        analyticsGeneration++
+        val generation = analyticsGeneration
+        analyticsJob?.cancel()
+        val requested = state.value
+        analyticsJob = viewModelScope.launch {
+            if (repository.session.value?.token != session.token) return@launch
+            _state.update { it.copy(analyticsLoading = true, analyticsError = null, analytics = null) }
+            try {
+                val result = repository.fetchAnalytics(requested.analyticsMonth, requested.analyticsCurrency,
+                    requested.analyticsTimezone)
+                if (generation == analyticsGeneration && repository.session.value?.token == session.token) {
+                    _state.update { it.copy(analytics = result) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (generation == analyticsGeneration && repository.session.value?.token == session.token) {
+                    if (error is HttpException && error.code() == 401) handleError(error)
+                    else _state.update { it.copy(analyticsError = analyticsMessage(error)) }
+                }
+            } finally {
+                if (generation == analyticsGeneration && repository.session.value?.token == session.token) {
+                    _state.update { it.copy(analyticsLoading = false) }
+                }
+            }
+        }
+    }
+
+    private suspend fun categoriesRequest(token: String, block: suspend () -> Unit) {
+        if (repository.session.value?.token != token) return
+        _state.update { it.copy(categoriesLoading = true, categoryError = null) }
+        try {
+            block()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (repository.session.value?.token == token) {
+                if (error is HttpException && error.code() == 401) handleError(error)
+                else _state.update { it.copy(categoryError = categoryMessage(error)) }
+            }
+        } finally {
+            if (repository.session.value?.token == token) _state.update { it.copy(categoriesLoading = false) }
+        }
+    }
+
+    private fun categoryMessage(error: Exception): String = when (error) {
+        is IOException -> "Нет соединения с сервером. Сохранённые категории доступны; создание требует подключения."
+        is HttpException -> httpMessage(error)
+        is IllegalArgumentException -> error.message ?: "Проверьте категорию"
+        else -> "Не удалось обновить категории. Попробуйте ещё раз"
+    }
+
+    private fun analyticsMessage(error: Exception): String = when (error) {
+        is IOException -> "Нет соединения с сервером. Подключитесь и обновите аналитику."
+        is HttpException -> if (error.code() == 409) "Итог за месяц слишком велик для расчёта. Выберите другой период."
+            else httpMessage(error)
+        else -> "Не удалось получить аналитику. Попробуйте обновить данные"
+    }
 
     fun setBaseCurrency(currency: String) {
         if (currency == state.value.baseCurrency) return
@@ -344,16 +511,20 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
 
     private fun action(block: suspend () -> Unit) {
         if (state.value.working) return
+        val actionSession = repository.session.value
         viewModelScope.launch {
+            if (repository.session.value?.token != actionSession?.token) return@launch
             _state.update { it.copy(working = true, error = null, notice = null) }
             try {
                 block()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                handleError(error)
+                if (repository.session.value?.token == actionSession?.token) handleError(error)
             } finally {
-                _state.update { it.copy(working = false) }
+                if (actionSession == null || repository.session.value?.token == actionSession.token) {
+                    _state.update { it.copy(working = false) }
+                }
             }
         }
     }

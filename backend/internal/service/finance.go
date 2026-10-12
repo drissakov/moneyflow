@@ -35,6 +35,7 @@ type TransactionView struct {
 	Note        string    `json:"note"`
 	OccurredAt  time.Time `json:"occurred_at"`
 	CreatedAt   time.Time `json:"created_at"`
+	CategoryID  *string   `json:"category_id"`
 }
 
 func (s *Service) CreateAccount(ctx context.Context, userID, name, currency, opening string) (AccountView, error) {
@@ -79,7 +80,7 @@ func (s *Service) Accounts(ctx context.Context, userID string) ([]AccountView, e
 func transactionView(t model.Transaction) TransactionView {
 	return TransactionView{
 		ID: t.ID, AccountID: t.AccountID, Kind: t.Kind, AmountMinor: strconv.FormatInt(t.AmountMinor, 10),
-		Currency: t.Currency, Note: t.Note, OccurredAt: t.OccurredAt, CreatedAt: t.CreatedAt,
+		Currency: t.Currency, Note: t.Note, OccurredAt: t.OccurredAt, CreatedAt: t.CreatedAt, CategoryID: t.CategoryID,
 	}
 }
 
@@ -133,6 +134,9 @@ func (s *Service) CreateTransaction(ctx context.Context, userID, key string, inp
 		if err != nil {
 			return err
 		}
+		if err := validateCategoryAssignment(tx, userID, input.Kind, input.CategoryID); err != nil {
+			return err
+		}
 		var balanceText string
 		err = tx.Raw(`SELECT (?::numeric + COALESCE(SUM(CASE
 			WHEN kind = 'income' THEN amount_minor ELSE -amount_minor END), 0))::text
@@ -150,7 +154,8 @@ func (s *Service) CreateTransaction(ctx context.Context, userID, key string, inp
 		t := model.Transaction{
 			ID: uuid.NewString(), UserID: userID, AccountID: a.ID, Kind: input.Kind, AmountMinor: input.Amount,
 			Currency: a.Currency, Note: input.Note, OccurredAt: input.OccurredAt,
-			CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
+			CreatedAt:  time.Now().UTC().Truncate(time.Microsecond),
+			CategoryID: input.CategoryID,
 		}
 		if err := tx.Create(&t).Error; err != nil {
 			return err

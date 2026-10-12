@@ -13,6 +13,7 @@ import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.PUT
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 data class Credentials(val email: String, val password: String)
@@ -58,17 +59,19 @@ data class TransactionDto(
     val note: String,
     @SerializedName("occurred_at") val occurredAt: String,
     @SerializedName("created_at") val createdAt: String,
+    @SerializedName("category_id") val categoryId: String? = null,
 ) {
     fun toDomain(): MoneyTransaction {
         validateUuid(id)
         validateUuid(accountId)
+        categoryId?.let(::validateUuid)
         require(kind == "income" || kind == "expense")
         SupportedCurrency.fromCode(currency)
         require(note.codePointCount(0, note.length) <= 500)
         Instant.parse(occurredAt)
         Instant.parse(createdAt)
         return MoneyTransaction(id, accountId, kind, parseServerMinor(amountMinor, positive = true, bounded = true),
-            currency, note, occurredAt, createdAt)
+            currency, note, occurredAt, createdAt, categoryId)
     }
 }
 
@@ -80,9 +83,11 @@ data class CreateTransactionRequest(
     @SerializedName("amount_minor") val amountMinor: String,
     val note: String,
     @SerializedName("occurred_at") val occurredAt: String,
+    @SerializedName("category_id") val categoryId: String? = null,
 ) {
     fun validate() {
         validateUuid(accountId)
+        categoryId?.let(::validateUuid)
         require(kind == "income" || kind == "expense")
         parseServerMinor(amountMinor, positive = true, bounded = true)
         require(note.codePointCount(0, note.length) <= 500)
@@ -107,7 +112,24 @@ interface MoneyFlowApi {
     @POST("api/v1/transactions") suspend fun createTransaction(
         @Header("Idempotency-Key") key: String,
         @Body body: CreateTransactionRequest,
+        @Header("Authorization") authorization: String? = null,
     ): TransactionDto
+    @GET("api/v1/categories") suspend fun categories(@Header("Authorization") authorization: String): CategoriesResponse
+    @POST("api/v1/categories") suspend fun createCategory(
+        @Body body: CreateCategoryRequest,
+        @Header("Authorization") authorization: String,
+    ): CategoryDto
+    @PUT("api/v1/transactions/{id}/category") suspend fun setTransactionCategory(
+        @Path("id") transactionId: String,
+        @Body body: SetTransactionCategoryRequest,
+        @Header("Authorization") authorization: String,
+    ): TransactionDto
+    @GET("api/v1/analytics") suspend fun analytics(
+        @Query("month") month: String,
+        @Query("currency") currency: String,
+        @Query("timezone") timezone: String,
+        @Header("Authorization") authorization: String,
+    ): MonthlyAnalyticsDto
     @GET("api/v1/currencies") suspend fun currencies(@Header("Authorization") authorization: String): CurrencyCatalogueDto
     @GET("api/v1/preferences") suspend fun preferences(@Header("Authorization") authorization: String): PreferencesDto
     @PUT("api/v1/preferences") suspend fun setPreferences(

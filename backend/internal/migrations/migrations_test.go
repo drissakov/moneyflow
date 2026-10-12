@@ -110,6 +110,20 @@ func TestIntegrationMulticurrencyMigrationPreservesExistingLedger(t *testing.T) 
 	if ledger.AmountMinor != 1299 || ledger.Note != "Original note" || ledger.Currency != "USD" || ledger.OpeningBalanceMinor != 50000 {
 		t.Fatal("migration changed original ledger values")
 	}
+	var assignedCategory *string
+	if err := db.Raw("SELECT category_id FROM transactions WHERE id=?", transaction).Scan(&assignedCategory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if assignedCategory != nil {
+		t.Fatal("category migration invented a category for an existing transaction")
+	}
+	var defaultCategories int64
+	if err := db.Raw("SELECT count(*) FROM categories WHERE user_id IS NULL AND is_default").Scan(&defaultCategories).Error; err != nil {
+		t.Fatal(err)
+	}
+	if defaultCategories != 65 {
+		t.Fatal("category migration did not install the complete default catalogue")
+	}
 	var savedChecksum string
 	db.Raw("SELECT checksum FROM schema_migrations WHERE version='001_initial.sql'").Scan(&savedChecksum)
 	if savedChecksum != checksum {

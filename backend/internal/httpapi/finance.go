@@ -61,16 +61,22 @@ func (a *API) createTransaction(c *gin.Context) {
 		return
 	}
 	var req struct {
-		AccountID   string `json:"account_id"`
-		Kind        string `json:"kind"`
-		AmountMinor string `json:"amount_minor"`
-		Note        string `json:"note"`
-		OccurredAt  string `json:"occurred_at"`
+		AccountID   string  `json:"account_id"`
+		Kind        string  `json:"kind"`
+		AmountMinor string  `json:"amount_minor"`
+		Note        string  `json:"note"`
+		OccurredAt  string  `json:"occurred_at"`
+		CategoryID  *string `json:"category_id"`
 	}
 	if !decode(c, &req) {
 		return
 	}
 	input, err := service.ValidateTransaction(req.AccountID, req.Kind, req.AmountMinor, req.Note, req.OccurredAt)
+	if err != nil {
+		a.respondError(c, err)
+		return
+	}
+	input.CategoryID, err = service.ParseOptionalID(req.CategoryID)
 	if err != nil {
 		a.respondError(c, err)
 		return

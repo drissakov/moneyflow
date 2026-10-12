@@ -34,6 +34,8 @@ tags:
   - name: Authentication
   - name: Accounts
   - name: Transactions
+  - name: Categories
+  - name: Analytics
   - name: Currencies
   - name: Preferences
   - name: Portfolio
@@ -317,6 +319,176 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '415':
           $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/categories:
+    get:
+      tags: [Categories]
+      operationId: listCategories
+      summary: List standard and private custom categories
+      responses:
+        '200':
+          description: Expense roots and their subcategories, and flat income categories.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [categories]
+                additionalProperties: false
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Category'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+    post:
+      tags: [Categories]
+      operationId: createCategory
+      summary: Create a private category or expense subcategory
+      description: |
+        Expense categories have at most two levels. A parent must be a visible
+        expense root. Income categories have no parent. Names are trimmed and
+        must be unique within the same kind and parent for this user, including
+        visible standard categories. Custom categories are private to their owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCategory'
+            example:
+              kind: expense
+              name: Покупка автомобиля
+              parent_id: null
+      responses:
+        '201':
+          description: Custom category created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: A category with this name already exists at the same level.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/transactions/{id}/category:
+    put:
+      tags: [Transactions, Categories]
+      operationId: assignTransactionCategory
+      summary: Assign or clear the category of an existing transaction
+      description: The category must be visible to the user and match the transaction kind. A null or omitted category_id clears the classification. Only classification changes; ledger amounts and balances are preserved.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                category_id:
+                  $ref: '#/components/schemas/NullableCategoryID'
+      responses:
+        '200':
+          description: Updated transaction.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/analytics:
+    get:
+      tags: [Analytics]
+      operationId: monthlyAnalytics
+      summary: Summarize monthly income and expenses by category in one native currency
+      description: |
+        Includes all the user's transactions in the requested calendar month
+        and account currency, independently of transaction-list pagination.
+        Opening balances are excluded. No exchange-rate conversion is applied.
+        Expense roots include subcategory spending exactly once; children list
+        only amounts explicitly assigned to subcategories. Uncategorized
+        transactions form a separate bucket. Nonempty buckets are sorted by
+        descending amount. Amounts are exact nonnegative signed-64-bit integers.
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'
+            example: '2026-10'
+        - name: currency
+          in: query
+          required: true
+          schema:
+            $ref: '#/components/schemas/Currency'
+        - name: timezone
+          in: query
+          required: false
+          schema:
+            type: string
+            default: UTC
+            example: Asia/Qyzylorda
+          description: IANA timezone used to calculate the start and end of the calendar month.
+      responses:
+        '200':
+          description: Monthly totals and category breakdowns; empty months return zero totals and empty lists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonthlyAnalytics'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Analytics totals exceed the supported signed-64-bit range.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
           $ref: '#/components/responses/InternalError'
         '504':
@@ -873,6 +1045,89 @@ components:
     TransactionKind:
       type: string
       enum: [expense, income]
+    NullableCategoryID:
+      type: string
+      format: uuid
+      nullable: true
+      description: Category or expense subcategory identifier; null means uncategorized.
+    CreateCategory:
+      type: object
+      required: [kind, name]
+      additionalProperties: false
+      properties:
+        kind:
+          $ref: '#/components/schemas/TransactionKind'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Trimmed Unicode name.
+        parent_id:
+          $ref: '#/components/schemas/NullableCategoryID'
+    Category:
+      type: object
+      required: [id, kind, name, parent_id, is_default]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TransactionKind'
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        parent_id:
+          $ref: '#/components/schemas/NullableCategoryID'
+        is_default:
+          type: boolean
+    AnalyticsMinorAmount:
+      type: string
+      pattern: '^(0|[1-9][0-9]{0,18})$'
+      maxLength: 19
+      description: Exact nonnegative integer in minor units, at most 9223372036854775807.
+    AnalyticsBucket:
+      type: object
+      required: [category_id, name, amount_minor, children]
+      additionalProperties: false
+      properties:
+        category_id:
+          $ref: '#/components/schemas/NullableCategoryID'
+        name:
+          type: string
+        amount_minor:
+          $ref: '#/components/schemas/AnalyticsMinorAmount'
+        children:
+          type: array
+          description: Expense subcategory totals. Child buckets and income buckets have empty children.
+          items:
+            $ref: '#/components/schemas/AnalyticsBucket'
+    MonthlyAnalytics:
+      type: object
+      required: [month, currency, timezone, income_minor, expense_minor, income, expenses]
+      additionalProperties: false
+      properties:
+        month:
+          type: string
+          example: '2026-10'
+        currency:
+          $ref: '#/components/schemas/Currency'
+        timezone:
+          type: string
+          example: Asia/Qyzylorda
+        income_minor:
+          $ref: '#/components/schemas/AnalyticsMinorAmount'
+        expense_minor:
+          $ref: '#/components/schemas/AnalyticsMinorAmount'
+        income:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsBucket'
+        expenses:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsBucket'
     CreateTransaction:
       type: object
       required: [account_id, kind, amount_minor, occurred_at]
@@ -883,6 +1138,8 @@ components:
           format: uuid
         kind:
           $ref: '#/components/schemas/TransactionKind'
+        category_id:
+          $ref: '#/components/schemas/NullableCategoryID'
         amount_minor:
           $ref: '#/components/schemas/PositiveMinorAmount'
         note:
@@ -907,6 +1164,8 @@ components:
           format: uuid
         kind:
           $ref: '#/components/schemas/TransactionKind'
+        category_id:
+          $ref: '#/components/schemas/NullableCategoryID'
         amount_minor:
           $ref: '#/components/schemas/PositiveMinorAmount'
         currency:
