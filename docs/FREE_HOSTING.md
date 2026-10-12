@@ -1,6 +1,6 @@
 # Бесплатный публичный тестовый сервер
 
-Для личного тестирования MoneyFlow используется Vercel Hobby для Go API, Neon Free для PostgreSQL и GitHub Actions для внешнего мониторинга и зашифрованных резервных копий. Домен `*.vercel.app` и HTTPS предоставляются Vercel; покупать VPS, домен или S3-хранилище не нужно. Этот runbook описывает первоначальную настройку, обновления, мониторинг и восстановление данных. Проекты MoneyFlow называются `moneyflow-api` в Vercel и `moneyflow-database` в Neon; текущий публичный URL указан в README после проверки deployment.
+Публичный API MoneyFlow: **[https://moneyflow-api-two.vercel.app/](https://moneyflow-api-two.vercel.app/)**. Для личного тестирования используется Vercel Hobby для Go API, Neon Free для PostgreSQL и GitHub Actions для внешнего мониторинга и зашифрованных резервных копий. Домен `*.vercel.app` и HTTPS предоставляются Vercel; покупать VPS, домен или S3-хранилище не нужно. Этот runbook описывает первоначальную настройку, обновления, мониторинг и восстановление данных. Проекты MoneyFlow называются `moneyflow-api` в Vercel и `moneyflow-database` в Neon.
 
 ```mermaid
 flowchart LR
@@ -80,8 +80,8 @@ try {
 После deployment проверьте в браузере:
 
 ```text
-https://YOUR_PROJECT.vercel.app/healthz  → {"status":"ok"}
-https://YOUR_PROJECT.vercel.app/readyz   → {"status":"ready"}
+https://moneyflow-api-two.vercel.app/healthz  → {"status":"ok"}
+https://moneyflow-api-two.vercel.app/readyz   → {"status":"ready"}
 ```
 
 URL должен открываться без страницы входа Vercel: мобильное приложение и монитор должны обращаться к публичному production API. Настройте deployment protection соответственно. Учётные данные самого MoneyFlow остаются обязательными для личных финансовых данных.
@@ -91,15 +91,15 @@ URL должен открываться без страницы входа Verce
 Откройте `android/` в Android Studio. В локальных Gradle properties задайте:
 
 ```properties
-MONEYFLOW_API_URL=https://YOUR_PROJECT.vercel.app/
-MONEYFLOW_RELEASE_API_URL=https://YOUR_PROJECT.vercel.app/
+MONEYFLOW_API_URL=https://moneyflow-api-two.vercel.app/
+MONEYFLOW_RELEASE_API_URL=https://moneyflow-api-two.vercel.app/
 ```
 
 Или установите debug-сборку командой:
 
 ```powershell
 cd android
-.\gradlew.bat :app:installDebug -PMONEYFLOW_API_URL=https://YOUR_PROJECT.vercel.app/
+.\gradlew.bat :app:installDebug -PMONEYFLOW_API_URL=https://moneyflow-api-two.vercel.app/
 ```
 
 Завершающий `/` обязателен. Создайте тестового пользователя, счёт, доход и расход; проверьте категории, аналитику и мультивалютность. В этом варианте приложению нужен интернет; локальный API `10.0.2.2:8080` заменяется публичным HTTPS URL. Release APK пока не имеет настроенной подписи; для установки используйте debug-сборку.
@@ -143,10 +143,12 @@ tar -xf moneyflow-backup.tar -C moneyflow-restore
 
 | Имя | Значение |
 | --- | --- |
-| `MONEYFLOW_API_URL` | `https://YOUR_PROJECT.vercel.app/` |
+| `MONEYFLOW_API_URL` | `https://moneyflow-api-two.vercel.app/` |
 | `MONEYFLOW_FREE_MONITOR_ENABLED` | `true` |
 
 Запустите **Actions → Free API monitoring → Run workflow**. Job проверяет публичный DNS, сертификат HTTPS, JSON `/healthz` и `/readyz`, а при включённых backup — наличие полной группы трёх файлов за последние **30 часов**, соответствующей успешному запуску `free-backup.yml` и номеру его попытки. Монитор также проверяет, что backup release остаётся draft. Если release не виден токену мониторинга, проверка завершится ошибкой, а не ложным подтверждением backup. Проверка выполняется каждые шесть часов, на 23-й минуте. Результат и задержка запросов видны в summary запуска. Failed job отображается в Actions; почтовые уведомления определяются вашими настройками GitHub Actions notifications. Дополнительный канал сообщений автоматически не подключается.
+
+Монитор выполняет только HTTP GET-запросы. Его `GITHUB_TOKEN` всё же требует `contents: write`: GitHub показывает draft releases только токену с push-доступом к репозиторию; `contents: read` возвращает список без приватного draft. Это проверено фактическим запуском workflow. Право `actions: read` используется для проверки успешного backup run. Токен не передаётся публичному API MoneyFlow и не сохраняется в checkout.
 
 Если проверки не проходят, проверьте доступность API и БД, лимиты Vercel/Neon, результат миграций, GitHub variables/secrets и последний backup job. Отдельно следите за фактическим использованием хранилища и compute в панелях провайдеров.
 

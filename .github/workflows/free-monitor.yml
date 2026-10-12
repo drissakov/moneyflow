@@ -7,7 +7,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # GitHub filters draft releases out of read-only token listings. Push access
+  # is needed to inspect the private backup draft; the monitor performs GETs only.
+  contents: write
   actions: read
 
 concurrency:
