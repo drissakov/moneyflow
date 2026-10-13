@@ -231,11 +231,20 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
         refreshAnalytics()
     }
 
+    fun onImportedFinancialDataChanged(accountId: String) {
+        selected.value = accountId
+        _state.update { it.copy(selectedAccountId = accountId, transactions = emptyList(), cachedPortfolio = null,
+            lastFxConfirmedAt = null, analytics = null) }
+        refreshAfterWrite()
+        refreshAnalytics()
+    }
+
     fun createAccount(name: String, currency: SupportedCurrency, opening: String) = action {
+        val actor = requireNotNull(repository.session.value)
         val normalizedName = name.trim()
         require(normalizedName.codePointCount(0, normalizedName.length) in 1..100) { "Название: от 1 до 100 символов" }
         val amount = Money.parseMinor(opening, currency)
-        val account = repository.createAccount(CreateAccountRequest(normalizedName, currency.code, amount.toString()))
+        val account = repository.createAccount(CreateAccountRequest(normalizedName, currency.code, amount.toString()), actor)
         selected.value = account.id
         _state.update {
             it.copy(selectedAccountId = account.id, mutationVersion = it.mutationVersion + 1, notice = "Счёт создан",

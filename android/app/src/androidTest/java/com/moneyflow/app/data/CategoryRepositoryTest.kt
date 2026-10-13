@@ -150,7 +150,7 @@ class CategoryRepositoryTest {
         override suspend fun logout(authorization: String?) = Unit
         override suspend fun me(): User = error("Unused API")
         override suspend fun accounts(): AccountsResponse = error("Unused API")
-        override suspend fun createAccount(body: CreateAccountRequest): AccountDto = error("Unused API")
+        override suspend fun createAccount(body: CreateAccountRequest, authorization: String?): AccountDto = error("Unused API")
         override suspend fun transactions(accountId: String, limit: Int): TransactionsResponse = error("Unused API")
         override suspend fun createTransaction(key: String, body: CreateTransactionRequest, authorization: String?): TransactionDto = error("Unused API")
         override suspend fun categories(authorization: String): CategoriesResponse = error("Unused API")

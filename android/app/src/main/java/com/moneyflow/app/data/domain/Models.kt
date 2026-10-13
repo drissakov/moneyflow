@@ -21,4 +21,5 @@ data class MoneyTransaction(
     val occurredAt: String,
     val createdAt: String,
     val categoryId: String? = null,
+    val excludeFromAnalytics: Boolean = false,
 )

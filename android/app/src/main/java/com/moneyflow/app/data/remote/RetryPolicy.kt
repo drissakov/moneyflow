@@ -10,6 +10,7 @@ internal fun isDefinitiveTransactionFailure(status: Int, code: String?): Boolean
 
 /** PostgreSQL persists timestamps to microsecond precision; tolerate that deliberate normalization. */
 internal fun matchesTransactionRequest(transaction: MoneyTransaction, request: CreateTransactionRequest): Boolean =
+    !transaction.excludeFromAnalytics &&
     transaction.accountId == request.accountId && transaction.kind == request.kind &&
         transaction.categoryId == request.categoryId &&
         transaction.amountMinor.toString() == request.amountMinor && transaction.note == request.note &&

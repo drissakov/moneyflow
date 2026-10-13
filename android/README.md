@@ -42,6 +42,34 @@ Server accounts and transactions are preserved. Room migration 1 → 2 adds
 preferences/portfolio caches without deleting existing accounts or transactions.
 Migration 2 → 3 adds the user-scoped category cache and a nullable transaction
 category ID. Existing transactions remain uncategorized until assigned by the user.
+Migration 3 → 4 adds the movement flag with a default of false; existing history
+is preserved. Movements affect balances and stay out of income/expense charts.
+
+## PDF statement import
+
+The Import screen accepts the verified Russian native-text Kaspi Gold/Halyk
+KZT layouts. PDFBox runs locally behind byte/page/text/row limits; original PDF
+bytes do not leave the device. Unsupported layouts, scans, passwords, incomplete
+rows and inconsistent totals block import.
+
+Select or create a KZT account with the correct statement opening balance, then
+explicitly send normalized rows for a server preview. Review duplicates,
+categories and own-account/cash movements before confirming. The server saves
+the selected batch atomically. Recent import history supports explicit undo.
+
+Commit/undo parameters and their UUID are encrypted and saved before a request.
+An uncertain response retains that exact request for retry. A recovery read error
+retains the ciphertext and blocks new writes until the owner reviews server
+history. All requests capture authorization and reject results after a session
+switch. No original PDFs or extracted bank rows are persisted in Room or in the
+recovery record.
+
+Apply server migration `004_statement_imports.sql` before installing this app.
+See [the import guide](../docs/STATEMENT_IMPORT.md) and [OpenAPI](../api/openapi.yaml).
+
+The opt-in `PrivateStatementPdfReaderTest` reads local fixtures supplied through
+instrumentation arguments in `files/pdf-import-private`. Real statements and
+independent oracles are never packaged into either APK or committed to Git.
 
 ## Categories and monthly analytics
 

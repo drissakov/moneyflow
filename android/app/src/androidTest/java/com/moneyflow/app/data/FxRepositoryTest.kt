@@ -30,6 +30,42 @@ class FxRepositoryTest {
             super.getSharedPreferences("fx_repository_test_$name", mode)
     }
 
+    @Test fun accountResponseFromPreviousSessionCannotBeCachedForTheNewUser() = runBlocking {
+        withTimeout(15_000) {
+            val context = isolatedContext()
+            context.getSharedPreferences("moneyflow_private", Context.MODE_PRIVATE).edit().clear().commit()
+            val database = Room.inMemoryDatabaseBuilder(context, MoneyFlowDatabase::class.java).build()
+            val started = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            val userB = "ee7d2d31-7369-4759-8125-f9d3967ded87"
+            var captured: String? = null
+            val api = object : StubApi() {
+                override suspend fun login(credentials: Credentials) = auth(if (credentials.email.startsWith("b")) userB else userId, credentials.email)
+                override suspend fun createAccount(body: CreateAccountRequest, authorization: String?): AccountDto {
+                    captured = authorization; started.complete(Unit); release.await()
+                    return AccountDto(accountId, body.name, body.currency, body.openingBalanceMinor, body.openingBalanceMinor, "2026-01-01T00:00:00Z")
+                }
+            }
+            try {
+                val repository = MoneyFlowRepository(database, SessionStore(context)) { api }
+                repository.authenticate("a@example.com", "test-password-123", false)
+                val actor = repository.session.value!!
+                val oldRequest = async(Dispatchers.Default) {
+                    runCatching { repository.createAccount(CreateAccountRequest("Example", "KZT", "100"), actor) }
+                }
+                started.await()
+                repository.authenticate("b@example.com", "test-password-123", false)
+                release.complete(Unit)
+                assertTrue(oldRequest.await().isFailure)
+                assertEquals("Bearer token-$userId", captured)
+                assertTrue(repository.observeAccounts(userB).first().isEmpty())
+                assertTrue(repository.observeAccounts(userId).first().isEmpty())
+            } finally {
+                release.complete(Unit); database.close()
+                context.getSharedPreferences("moneyflow_private", Context.MODE_PRIVATE).edit().clear().commit()
+            }
+        }
+    }
+
     @Test fun rapidPreferenceChangesFinishWithTheLatestChoiceOnBothClientAndServer() = runBlocking {
         withTimeout(15_000) {
             val context = isolatedContext()
@@ -82,7 +118,7 @@ class FxRepositoryTest {
             val timestamp = "2026-10-11T00:00:00Z"
             val api = object : StubApi() {
                 override suspend fun login(credentials: Credentials) = auth(userId, credentials.email)
-                override suspend fun createAccount(body: CreateAccountRequest) =
+                override suspend fun createAccount(body: CreateAccountRequest, authorization: String?) =
                     AccountDto(accountId, body.name, body.currency, body.openingBalanceMinor, body.openingBalanceMinor, timestamp)
                 override suspend fun portfolio(base: String, authorization: String): PortfolioDto {
                     started.complete(Unit); release.await()
@@ -120,7 +156,7 @@ class FxRepositoryTest {
         override suspend fun logout(authorization: String?) = Unit
         override suspend fun me(): User = error("Unused API")
         override suspend fun accounts(): AccountsResponse = error("Unused API")
-        override suspend fun createAccount(body: CreateAccountRequest): AccountDto = error("Unused API")
+        override suspend fun createAccount(body: CreateAccountRequest, authorization: String?): AccountDto = error("Unused API")
         override suspend fun transactions(accountId: String, limit: Int): TransactionsResponse = error("Unused API")
         override suspend fun createTransaction(key: String, body: CreateTransactionRequest, authorization: String?): TransactionDto = error("Unused API")
         override suspend fun categories(authorization: String): CategoriesResponse = error("Unused API")

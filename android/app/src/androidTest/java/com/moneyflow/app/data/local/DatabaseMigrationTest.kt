@@ -15,6 +15,20 @@ import org.junit.runner.RunWith
 class DatabaseMigrationTest {
     @get:Rule val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), MoneyFlowDatabase::class.java)
 
+    @Test fun migrateThreeToFourPreservesCategoriesAndMarksOldRowsAsOrdinary() {
+        val name = "moneyflow-movement-migration-test"
+        helper.createDatabase(name, 3).apply {
+            execSQL("INSERT INTO transactions (userId,id,accountId,kind,amountMinor,currency,note,occurredAt,createdAt,categoryId) VALUES ('user-a','transaction-a','account-a','expense',100,'KZT','Example','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','category-a')")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 4, true, MoneyFlowDatabase.MIGRATION_3_4).apply {
+            query("SELECT categoryId,amountMinor,excludeFromAnalytics FROM transactions WHERE id='transaction-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals("category-a", it.getString(0)); assertEquals(100L, it.getLong(1)); assertEquals(0, it.getInt(2))
+            }
+            close()
+        }
+    }
+
     @Test fun migrateOneToTwoPreservesExistingAccountsAndTransactions() {
         val name = "moneyflow-migration-test" // Dedicated test database; never the user's moneyflow.db.
         helper.createDatabase(name, 1).apply {

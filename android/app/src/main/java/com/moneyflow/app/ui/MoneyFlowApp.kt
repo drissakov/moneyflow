@@ -48,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +61,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.moneyflow.app.BuildConfig
+import com.moneyflow.app.MoneyFlowApplication
 import com.moneyflow.app.data.domain.Account
 import com.moneyflow.app.data.domain.Money
 import com.moneyflow.app.data.domain.MoneyTransaction
@@ -83,6 +86,12 @@ import java.util.Locale
 @Composable
 fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val app = LocalContext.current.applicationContext as MoneyFlowApplication
+    val imports: ImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = ImportViewModel.factory(app, app.repository))
+    val importState by imports.state.collectAsStateWithLifecycle()
+    val importBlocksWrites = importState.pending != null || importState.recoveryUnavailable || importState.recoveryChecking ||
+        (state.session != null && state.session?.token != importState.session?.token)
+    SideEffect { imports.onMutation(viewModel::onImportedFinancialDataChanged) }
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var screen by rememberSaveable { mutableStateOf("overview") }
     var categoryTransactionId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -113,6 +122,7 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
                         when (screen) {
                             "analytics" -> viewModel.refreshAnalytics()
                             "categories" -> viewModel.refreshCategories()
+                            "imports" -> imports.refreshHistory()
                             else -> viewModel.refresh()
                         }
                     }, enabled = !state.refreshing && !state.working && !state.analyticsLoading && !state.categoriesLoading,
@@ -128,7 +138,8 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
         },
         bottomBar = {
             if (state.session != null) NavigationBar {
-                listOf(Triple("overview", "Обзор", "◉"), Triple("analytics", "Аналитика", "◔"), Triple("categories", "Категории", "▦"))
+                listOf(Triple("overview", "Обзор", "◉"), Triple("analytics", "Аналитика", "◔"), Triple("categories", "Категории", "▦"),
+                    Triple("imports", "Импорт", "⇣"))
                     .forEach { (key, label, glyph) ->
                         NavigationBarItem(selected = screen == key, onClick = { screen = key },
                             icon = { Text(glyph, fontSize = 22.sp) }, label = { Text(label) }, modifier = Modifier.testTag("nav_$key"))
@@ -136,7 +147,7 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
             }
         },
         floatingActionButton = {
-            if (state.session != null && screen == "overview" && state.selectedAccount != null && state.pending == null) {
+            if (state.session != null && screen == "overview" && state.selectedAccount != null && state.pending == null && !importBlocksWrites) {
                 ExtendedFloatingActionButton(
                     onClick = { if (!state.working) { viewModel.clearMessages(); dialog = "transaction" } },
                     containerColor = MaterialTheme.colorScheme.primary,
@@ -154,8 +165,9 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
                 state.session == null -> AuthScreen(state, viewModel)
                 screen == "analytics" -> AnalyticsScreen(state, viewModel)
                 screen == "categories" -> CategoriesScreen(state, viewModel)
+                screen == "imports" -> ImportsScreen(importState, imports, state.pending != null)
                 else -> Dashboard(state, viewModel,
-                    onAddAccount = { viewModel.clearMessages(); dialog = "account" },
+                    onAddAccount = { if (importBlocksWrites) screen = "imports" else { viewModel.clearMessages(); dialog = "account" } },
                     onConverter = { viewModel.clearConversion(); dialog = "convert" },
                     onTransactionCategory = { transaction ->
                         viewModel.clearMessages(); viewModel.clearCategoryMessages()
@@ -365,10 +377,12 @@ private fun TransactionRow(transaction: MoneyTransaction, state: MoneyFlowUiStat
             ) { Text(if (income) "↙" else "↗", fontSize = 24.sp, color = MaterialTheme.colorScheme.onSurface) }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(transaction.note.ifBlank { if (income) "Доход" else "Расход" },
+                Text(transaction.note.ifBlank { if (transaction.excludeFromAnalytics) "Движение денег" else if (income) "Доход" else "Расход" },
                     style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(formatTime(transaction.occurredAt), style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (transaction.excludeFromAnalytics) Text("Движение денег · вне аналитики", style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${categoryPath(transaction.categoryId, state.categories)} ›", style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("transaction_category_path_${transaction.id}"))

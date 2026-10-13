@@ -60,6 +60,7 @@ data class TransactionDto(
     @SerializedName("occurred_at") val occurredAt: String,
     @SerializedName("created_at") val createdAt: String,
     @SerializedName("category_id") val categoryId: String? = null,
+    @SerializedName("exclude_from_analytics") val excludeFromAnalytics: Boolean = false,
 ) {
     fun toDomain(): MoneyTransaction {
         validateUuid(id)
@@ -71,7 +72,7 @@ data class TransactionDto(
         Instant.parse(occurredAt)
         Instant.parse(createdAt)
         return MoneyTransaction(id, accountId, kind, parseServerMinor(amountMinor, positive = true, bounded = true),
-            currency, note, occurredAt, createdAt, categoryId)
+            currency, note, occurredAt, createdAt, categoryId, excludeFromAnalytics)
     }
 }
 
@@ -104,7 +105,8 @@ interface MoneyFlowApi {
     @POST("api/v1/auth/logout") suspend fun logout(@Header("Authorization") authorization: String? = null)
     @GET("api/v1/me") suspend fun me(): User
     @GET("api/v1/accounts") suspend fun accounts(): AccountsResponse
-    @POST("api/v1/accounts") suspend fun createAccount(@Body body: CreateAccountRequest): AccountDto
+    @POST("api/v1/accounts") suspend fun createAccount(@Body body: CreateAccountRequest,
+        @Header("Authorization") authorization: String? = null): AccountDto
     @GET("api/v1/transactions") suspend fun transactions(
         @Query("account_id") accountId: String,
         @Query("limit") limit: Int = 50,

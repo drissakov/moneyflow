@@ -4,3 +4,6 @@
 -keep class com.moneyflow.app.data.Session { *; }
 -keep class com.moneyflow.app.data.PendingTransaction { *; }
 -keep class com.moneyflow.app.data.domain.User { *; }
+
+# PDFBox's JPX image decoder is optional; statement imports extract text without rendering images.
+-dontwarn com.gemalto.jp2.JP2Decoder

@@ -1,6 +1,7 @@
 package com.moneyflow.app.data.local
 
 import androidx.room.Dao
+import androidx.room.ColumnInfo
 import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Index
@@ -46,12 +47,13 @@ data class TransactionEntity(
     val occurredAt: String,
     val createdAt: String,
     val categoryId: String? = null,
+    @ColumnInfo(defaultValue = "0") val excludeFromAnalytics: Boolean = false,
 ) {
-    fun toDomain() = MoneyTransaction(id, accountId, kind, amountMinor, currency, note, occurredAt, createdAt, categoryId)
+    fun toDomain() = MoneyTransaction(id, accountId, kind, amountMinor, currency, note, occurredAt, createdAt, categoryId, excludeFromAnalytics)
     companion object {
         fun from(userId: String, transaction: MoneyTransaction) = TransactionEntity(
             userId, transaction.id, transaction.accountId, transaction.kind, transaction.amountMinor,
-            transaction.currency, transaction.note, transaction.occurredAt, transaction.createdAt, transaction.categoryId,
+            transaction.currency, transaction.note, transaction.occurredAt, transaction.createdAt, transaction.categoryId, transaction.excludeFromAnalytics,
         )
     }
 }
@@ -142,7 +144,7 @@ interface MoneyFlowDao {
 }
 
 @Database(entities = [AccountEntity::class, TransactionEntity::class, FxPreferencesEntity::class,
-    PortfolioSnapshotEntity::class, CategoryEntity::class], version = 3, exportSchema = true)
+    PortfolioSnapshotEntity::class, CategoryEntity::class], version = 4, exportSchema = true)
 abstract class MoneyFlowDatabase : RoomDatabase() {
     abstract fun dao(): MoneyFlowDao
 
@@ -158,6 +160,11 @@ abstract class MoneyFlowDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `transactions` ADD COLUMN `categoryId` TEXT")
                 db.execSQL("CREATE TABLE IF NOT EXISTS `categories` (`userId` TEXT NOT NULL, `id` TEXT NOT NULL, `kind` TEXT NOT NULL, `name` TEXT NOT NULL, `parentId` TEXT, `isDefault` INTEGER NOT NULL, PRIMARY KEY(`userId`, `id`))")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_categories_userId_parentId` ON `categories` (`userId`, `parentId`)")
+            }
+        }
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `transactions` ADD COLUMN `excludeFromAnalytics` INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

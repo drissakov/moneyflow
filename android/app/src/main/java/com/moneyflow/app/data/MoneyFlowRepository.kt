@@ -30,6 +30,11 @@ import com.moneyflow.app.data.remote.PreferencesDto
 import com.moneyflow.app.data.remote.CreateCategoryRequest
 import com.moneyflow.app.data.remote.SetTransactionCategoryRequest
 import com.moneyflow.app.data.remote.normalizeCategoryName
+import com.moneyflow.app.data.remote.ImportsApi
+import com.moneyflow.app.data.remote.ImportPreviewRequest
+import com.moneyflow.app.data.remote.ImportPreviewDto
+import com.moneyflow.app.data.remote.ImportReceiptDto
+import com.moneyflow.app.data.remote.PendingImportAction
 import com.moneyflow.app.data.domain.SupportedCurrency
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -53,6 +58,7 @@ data class CachedPortfolio(val portfolio: PortfolioDto, val receivedAt: Instant)
 class MoneyFlowRepository(
     private val database: MoneyFlowDatabase,
     private val store: SessionStore,
+    importsApiProvider: ((() -> String?) -> ImportsApi)? = null,
     apiProvider: (() -> String?) -> MoneyFlowApi,
 ) {
     private val mutex = Mutex()
@@ -64,6 +70,7 @@ class MoneyFlowRepository(
     private val _pending = MutableStateFlow(_session.value?.user?.id?.let(store::readPending))
     val pending: StateFlow<PendingTransaction?> = _pending.asStateFlow()
     private val api = apiProvider { _session.value?.token }
+    private val importsApi = importsApiProvider?.invoke { _session.value?.token }
     private val dao = database.dao()
 
     fun observeAccounts(userId: String): Flow<List<Account>> =
@@ -74,6 +81,52 @@ class MoneyFlowRepository(
 
     fun observeCategories(userId: String): Flow<List<Category>> =
         dao.observeCategories(userId).map { rows -> rows.map(CategoryEntity::toDomain) }
+
+    suspend fun previewImport(request: ImportPreviewRequest, expectedSession: Session? = null): ImportPreviewDto {
+        request.validate()
+        val current = requireSession()
+        require(expectedSession == null || (expectedSession.token == current.token && expectedSession.user.id == current.user.id)) {
+            "Сессия изменилась"
+        }
+        val result = requireNotNull(importsApi).preview(request, "Bearer ${current.token}").validated(request)
+        check(isCurrentSession(current)) { "Сессия изменилась" }
+        return result
+    }
+
+    suspend fun importsHistory(): List<ImportReceiptDto> {
+        val current = requireSession()
+        val result = requireNotNull(importsApi).history(20, "Bearer ${current.token}").validated().imports
+        check(isCurrentSession(current)) { "Сессия изменилась" }
+        return result
+    }
+
+    suspend fun executeImport(action: PendingImportAction): ImportReceiptDto {
+        action.validate()
+        val current = requireSession()
+        require(action.userId == current.user.id) { "Войдите в аккаунт, создавший подтверждение" }
+        val remote = requireNotNull(importsApi)
+        val result = if (action.operation == "commit") remote.commit(action.draftId,
+            requireNotNull(action.selection), action.key, "Bearer ${current.token}")
+        else remote.undo(action.draftId, emptyMap(), action.key, "Bearer ${current.token}")
+        result.validated()
+        require(result.id == action.draftId && result.accountId == action.accountId &&
+            result.status == if (action.operation == "commit") "committed" else "undone") {
+            "Ответ сервера не соответствует подтверждению импорта"
+        }
+        if (action.operation == "commit") require(result.importedCount == action.selection?.rows?.size &&
+            result.skippedCount == action.totalRows - result.importedCount) { "Сервер вернул другое число операций" }
+        else require(result.importedCount == action.originalImportedCount)
+        mutex.withLock {
+            check(isCurrentSession(current)) { "Сессия изменилась" }
+            database.withTransaction {
+                portfolioRevision++
+                dao.deletePortfolios(current.user.id)
+                // Imported or removed entries may be outside the cached latest window.
+                dao.deleteTransactions(current.user.id, action.accountId)
+            }
+        }
+        return result
+    }
 
     suspend fun refreshCategories() {
         val current = requireSession()
@@ -307,13 +360,18 @@ class MoneyFlowRepository(
         }
     }
 
-    suspend fun createAccount(body: CreateAccountRequest): Account {
-        val userId = requireUserId()
-        val account = api.createAccount(body).toDomain()
+    suspend fun createAccount(body: CreateAccountRequest, expectedSession: Session? = null): Account {
+        val current = requireSession()
+        require(expectedSession == null || (expectedSession.token == current.token && expectedSession.user.id == current.user.id)) {
+            "Сессия изменилась"
+        }
+        val userId = current.user.id
+        val account = api.createAccount(body, "Bearer ${current.token}").toDomain()
         require(account.name == body.name && account.currency == body.currency &&
             account.openingBalanceMinor.toString() == body.openingBalanceMinor) { "Ответ сервера не соответствует создаваемому счёту" }
         mutex.withLock {
-            if (_session.value?.user?.id == userId) database.withTransaction {
+            check(isCurrentSession(current)) { "Сессия изменилась" }
+            database.withTransaction {
                 dao.putAccounts(listOf(AccountEntity.from(userId, account)))
                 portfolioRevision++
                 dao.deletePortfolios(userId)
