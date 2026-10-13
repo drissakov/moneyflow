@@ -1,8 +1,11 @@
 package com.moneyflow.app.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,6 +36,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -80,7 +84,8 @@ internal fun CategorySelector(
     Box(Modifier.fillMaxWidth()) {
         OutlinedButton(
             onClick = { expanded = true }, enabled = enabled,
-            modifier = Modifier.fillMaxWidth().testTag(tagPrefix), shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth().testTag(tagPrefix), shape = RoundedCornerShape(16.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(label, style = MaterialTheme.typography.labelSmall)
@@ -112,6 +117,7 @@ internal fun CategorySelector(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun CategoriesScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel) {
     var kind by rememberSaveable { mutableStateOf("expense") }
@@ -121,18 +127,19 @@ internal fun CategoriesScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewM
     val roots = state.categories.filter { it.kind == kind && it.parentId == null }
     LazyColumn(
         Modifier.widthIn(max = 620.dp).fillMaxSize().testTag("categories_screen"),
-        contentPadding = PaddingValues(22.dp, 12.dp, 22.dp, 30.dp), verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(20.dp, 16.dp, 20.dp, 30.dp), verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Категории", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                 Text("Сгруппируйте операции так, как удобно вам.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(kind == "expense", onClick = { kind = "expense" }, label = { Text("Расходы") }, modifier = Modifier.testTag("categories_expense"))
                     FilterChip(kind == "income", onClick = { kind = "income" }, label = { Text("Доходы") }, modifier = Modifier.testTag("categories_income"))
                 }
                 Button(onClick = { parentId = null; viewModel.clearCategoryMessages(); creating = true },
-                    enabled = !state.categoryWorking, modifier = Modifier.fillMaxWidth().testTag("category_add")) {
+                    enabled = !state.categoryWorking, shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(16.dp), modifier = Modifier.fillMaxWidth().testTag("category_add")) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text(" Новая категория")
                 }
@@ -150,10 +157,15 @@ internal fun CategoriesScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewM
             }
         } }
         if (roots.isEmpty() && !state.categoriesLoading && state.categoryError == null) item {
-            Text("Категорий пока нет. Добавьте первую.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
+                Text("Категорий пока нет. Добавьте первую.", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(20.dp))
+            }
         }
         items(roots, key = { it.id }) { category ->
-            Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth().testTag("category_card_${category.id}")) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(category.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -162,7 +174,7 @@ internal fun CategoriesScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewM
                     val children = state.categories.filter { it.parentId == category.id }
                     children.forEach { child ->
                         Row(Modifier.fillMaxWidth().padding(start = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("↳", color = MaterialTheme.colorScheme.primary)
+                            Text("↳", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(child.name, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
@@ -177,7 +189,7 @@ internal fun CategoriesScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewM
     if (creating) CreateCategoryDialog(state, viewModel, kind, parentId, dismiss = { creating = false })
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun CreateCategoryDialog(
     state: MoneyFlowUiState,
@@ -204,7 +216,7 @@ internal fun CreateCategoryDialog(
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (kind == "expense") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(!subcategory, onClick = { subcategory = false }, label = { Text("Категория") },
                             enabled = !state.categoryWorking, modifier = Modifier.testTag("category_level_root"))
                         FilterChip(subcategory, onClick = { subcategory = true }, label = { Text("Подкатегория") },
@@ -214,6 +226,7 @@ internal fun CreateCategoryDialog(
                         enabled = !state.categoryWorking, label = "Родительская категория", tagPrefix = "category_parent", rootsOnly = true)
                 }
                 OutlinedTextField(name, { name = it }, label = { Text("Название") }, singleLine = true,
+                    shape = RoundedCornerShape(16.dp),
                     supportingText = { Text(if (subcategory) "Например: «Кофе» или «Сигареты»" else if (kind == "income") "Например: «Продажа автомобиля»" else "Например: «Покупка автомобиля»") },
                     enabled = !state.categoryWorking, modifier = Modifier.fillMaxWidth().testTag("category_name"))
                 state.categoryError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }

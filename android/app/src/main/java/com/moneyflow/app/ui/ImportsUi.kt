@@ -2,12 +2,17 @@ package com.moneyflow.app.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -26,6 +31,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, manualPending: Boolean) {
     var previewConfirmation by rememberSaveable { mutableStateOf(false) }
@@ -44,10 +50,13 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
     LaunchedEffect(state.session?.token) { previewConfirmation = false; commitConfirmation = false; undoConfirmation = null; newAccount = false;
         recoveryReviewed = false; forgetConfirmation = false }
     LazyColumn(Modifier.fillMaxSize().widthIn(max = 680.dp).testTag("imports_screen"),
-        contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        contentPadding = PaddingValues(20.dp, 16.dp, 20.dp, 30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
-            Text("Импорт выписки", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text("Текстовые PDF Kaspi и Halyk · счета в KZT", style = MaterialTheme.typography.bodyMedium)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Импорт выписки", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                Text("Текстовые PDF Kaspi и Halyk · счета в KZT", style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         if (state.busy || state.historyLoading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         state.error?.let { item { ImportMessage(it, true) } }
@@ -82,23 +91,27 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
         } }
         item {
             ImportCard {
-                Text("1. Выберите PDF", fontWeight = FontWeight.Bold)
+                Text("1. Выберите PDF", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text("Исходный PDF читается только на устройстве. Сканы и защищённые паролем файлы не поддерживаются.", style = MaterialTheme.typography.bodySmall)
                 Button(onClick = {
                     pickerToken = state.session?.token; pickerAccount = state.accountId
                     picker.launch(arrayOf("application/pdf"))
-                }, enabled = editable, modifier = Modifier.testTag("import_pick_pdf")) { Text("Выбрать PDF") }
+                }, enabled = editable, shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(16.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("import_pick_pdf")) { Text("Выбрать PDF") }
                 if (state.parsing) TextButton(onClick = viewModel::cancelParsing) { Text("Отменить разбор") }
             }
         }
         item {
             ImportCard {
-                Text("2. Выберите счёт", fontWeight = FontWeight.Bold)
+                Text("2. Выберите счёт", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 var expanded by rememberSaveable { mutableStateOf(false) }
                 Box {
                     OutlinedButton(onClick = { expanded = true }, enabled = editable && state.accounts.isNotEmpty(),
+                        shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                         modifier = Modifier.fillMaxWidth().testTag("import_account")) {
-                        Text(state.account?.let { "${it.name} · ${Money.format(it.balanceMinor, "KZT")}" } ?: "Нет выбранного счёта в KZT")
+                        Text(state.account?.let { "${it.name} · ${Money.format(it.balanceMinor, "KZT")}" } ?: "Нет выбранного счёта в KZT",
+                            modifier = Modifier.weight(1f))
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Выбрать счёт")
                     }
                     DropdownMenu(expanded, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 300.dp)) {
                         state.accounts.forEach { account -> DropdownMenuItem(text = { Text(account.name) },
@@ -119,7 +132,7 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
                     }
                 }
                 Text("Часовой пояс дат выписки", style = MaterialTheme.typography.labelMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("Asia/Qyzylorda" to "Кызылорда", "Asia/Almaty" to "Алматы").forEach { (zone, title) ->
                         FilterChip(state.timezone == zone, onClick = { viewModel.setTimezone(zone) }, label = { Text(title) }, enabled = editable)
                     }
@@ -128,7 +141,7 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
         }
         state.parsed?.statement?.let { statement -> item {
             ImportCard {
-                Text("3. Проверьте разбор", fontWeight = FontWeight.Bold)
+                Text("3. Проверьте разбор", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Text("${statement.bank.replaceFirstChar { it.uppercase() }} · ${statement.rows.size} записей · ${statement.periodStart ?: "—"} — ${statement.periodEnd ?: "—"}")
                 statement.openingBalanceMinor?.let { Text("Начало: ${Money.format(it, "KZT")}") }
                 statement.closingBalanceMinor?.let { Text("Конец: ${Money.format(it, "KZT")}") }
@@ -140,13 +153,14 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
                 statement.warnings.forEach { ImportMessage(it, false) }
                 statement.errors.forEach { ImportMessage(it, true) }
                 Button(onClick = { previewConfirmation = true }, enabled = editable && statement.errors.isEmpty() && state.account != null,
-                    modifier = Modifier.testTag("import_preview")) { Text("Проверить на сервере") }
+                    shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(16.dp),
+                    modifier = Modifier.fillMaxWidth().testTag("import_preview")) { Text("Проверить на сервере") }
             }
         } }
         state.draft?.let { draft ->
             item {
                 ImportCard {
-                    Text("4. Выберите записи", fontWeight = FontWeight.Bold)
+                    Text("4. Выберите записи", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text("Выбрано ${state.selectedCount} из ${draft.rows.size}. Уже импортированные и возможные повторы исключены по умолчанию.")
                     Text("Одинаковые покупки внутри выписки остаются отдельными записями. Переводы и снятия проверьте вручную.", style = MaterialTheme.typography.bodySmall)
                     Text("Баланс до импорта: ${Money.format(draft.balanceBeforeMinor, "KZT")}")
@@ -161,7 +175,8 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
                         }
                     }
                     Button(onClick = { commitConfirmation = true }, enabled = state.canCommit && !manualPending,
-                        modifier = Modifier.testTag("import_commit")) { Text("Импортировать выбранные") }
+                        shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(16.dp),
+                        modifier = Modifier.fillMaxWidth().testTag("import_commit")) { Text("Импортировать выбранные") }
                 }
             }
             items(draft.rows, key = { "preview_${it.rowId}" }) { row ->
@@ -212,6 +227,7 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
         dismissButton = { TextButton(onClick = { forgetConfirmation = false }) { Text("Отмена") } })
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ImportReviewRow(row: ImportPreviewRow, choice: ImportRowChoice, transfer: Boolean,
     state: ImportUiState, viewModel: ImportViewModel, editable: Boolean) {
@@ -223,7 +239,8 @@ private fun ImportReviewRow(row: ImportPreviewRow, choice: ImportRowChoice, tran
             Column(Modifier.weight(1f)) {
                 val date = DateTimeFormatter.ISO_LOCAL_DATE.withZone(ZoneId.of(state.timezone)).format(Instant.parse(row.occurredAt))
                 Text("$date · ${if (row.kind == "income") "+" else "−"}${Money.format(row.amountMinor, "KZT")}", fontWeight = FontWeight.SemiBold)
-                Text(row.note.ifBlank { "Без описания" }, style = MaterialTheme.typography.bodySmall)
+                Text(row.note.ifBlank { "Без описания" }, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (row.duplicate != "new") Text(if (row.duplicate == "exact") "Уже импортировано из этого PDF" else "Возможный повтор: совпадений ${row.matchingCount}",
@@ -235,7 +252,7 @@ private fun ImportReviewRow(row: ImportPreviewRow, choice: ImportRowChoice, tran
         if (choice.selected) {
             if (transfer) {
                 Text("Похоже на перевод или движение наличных. Это подсказка, проверьте назначение сами.", style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     TextButton(onClick = { viewModel.movement(row.rowId, true) }, enabled = editable) { Text("Движение денег") }
                     TextButton(onClick = { viewModel.movement(row.rowId, false) }, enabled = editable) { Text("Доход / расход") }
                 }
@@ -261,9 +278,11 @@ private fun ImportNewAccountDialog(state: ImportUiState, viewModel: ImportViewMo
     LaunchedEffect(state.accountId) { if (state.accountId != initialAccount) dismiss() }
     AlertDialog(onDismissRequest = { if (!state.busy) dismiss() }, title = { Text("Новый счёт для выписки") },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(name, { name = it }, label = { Text("Название счёта") }, singleLine = true, modifier = Modifier.testTag("import_account_name"))
+            OutlinedTextField(name, { name = it }, label = { Text("Название счёта") }, singleLine = true,
+                shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().testTag("import_account_name"))
             OutlinedTextField(opening, { opening = it; accepted = false }, label = { Text("Остаток перед периодом, KZT") }, singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), modifier = Modifier.testTag("import_account_opening"))
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth().testTag("import_account_opening"))
             Text("Предложен начальный остаток выписки, если он распознан. Конечный остаток не используется как начальный.", style = MaterialTheme.typography.bodySmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(accepted, onCheckedChange = { accepted = it }, modifier = Modifier.testTag("import_accept_opening"))
@@ -276,11 +295,19 @@ private fun ImportNewAccountDialog(state: ImportUiState, viewModel: ImportViewMo
 }
 
 @Composable private fun ImportCard(content: @Composable ColumnScope.() -> Unit) {
-    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp), content = content)
+    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }
 }
 @Composable private fun ImportMessage(text: String, error: Boolean) {
     Surface(color = if (error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
-        shape = RoundedCornerShape(12.dp)) { Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(12.dp)) }
+        contentColor = if (error) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+        border = BorderStroke(1.dp, if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+            Icon(if (error) Icons.Default.Warning else Icons.Default.Info, contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        }
+    }
 }

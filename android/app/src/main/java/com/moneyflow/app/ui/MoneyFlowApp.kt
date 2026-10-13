@@ -1,6 +1,7 @@
 package com.moneyflow.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
@@ -41,6 +44,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -58,8 +62,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
@@ -102,7 +104,7 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             Row(
-                modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 22.dp, vertical = 12.dp),
+                modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 BrandMark()
@@ -137,12 +139,27 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
             }
         },
         bottomBar = {
-            if (state.session != null) NavigationBar {
-                listOf(Triple("overview", "Обзор", "◉"), Triple("analytics", "Аналитика", "◔"), Triple("categories", "Категории", "▦"),
-                    Triple("imports", "Импорт", "⇣"))
-                    .forEach { (key, label, glyph) ->
-                        NavigationBarItem(selected = screen == key, onClick = { screen = key },
-                            icon = { Text(glyph, fontSize = 22.sp) }, label = { Text(label) }, modifier = Modifier.testTag("nav_$key"))
+            if (state.session != null) Surface(color = MaterialTheme.colorScheme.surface) {
+                Column {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
+                        listOf(Triple("overview", "Обзор", NavigationIcons.Overview),
+                            Triple("analytics", "Аналитика", NavigationIcons.Analytics),
+                            Triple("categories", "Категории", NavigationIcons.Categories),
+                            Triple("imports", "Импорт", NavigationIcons.Imports))
+                            .forEach { (key, label, image) ->
+                                NavigationBarItem(selected = screen == key, onClick = { screen = key },
+                                    icon = { Icon(image, contentDescription = null, modifier = Modifier.size(22.dp)) },
+                                    label = { Text(label, fontWeight = if (screen == key) FontWeight.SemiBold else FontWeight.Medium) },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                                        selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        indicatorColor = MaterialTheme.colorScheme.primary,
+                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    ), modifier = Modifier.testTag("nav_$key"))
+                            }
+                    }
                     }
             }
         },
@@ -154,6 +171,7 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
                     contentColor = MaterialTheme.colorScheme.onPrimary,
                     icon = { Icon(Icons.Default.Add, contentDescription = null) },
                     text = { Text("Добавить операцию") },
+                    shape = RoundedCornerShape(18.dp),
                     modifier = Modifier.testTag("add_transaction"),
                 )
             }
@@ -198,10 +216,10 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
 @Composable
 private fun BrandMark() {
     Box(
-        Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF123F36)),
+        Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primary),
         contentAlignment = Alignment.Center,
     ) {
-        Text("M", color = Color(0xFF95EBC7), fontWeight = FontWeight.ExtraBold, fontSize = 24.sp)
+        Text("M", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
     }
 }
 
@@ -218,7 +236,8 @@ private fun AuthScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel) {
         Text("Ваши деньги.\nВаш ясный план.", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
         Text("Счета, доходы и расходы в одном месте. Данные сохраняются в вашем аккаунте.",
             style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Card(shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
             Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(if (register) "Создать аккаунт" else "Добро пожаловать", style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold)
@@ -267,8 +286,8 @@ private fun Dashboard(
 ) {
     LazyColumn(
         modifier = Modifier.widthIn(max = 620.dp).fillMaxSize().testTag("dashboard"),
-        contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 12.dp, bottom = 100.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 104.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (state.refreshing || state.working) item {
             LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
@@ -282,8 +301,8 @@ private fun Dashboard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        item { PortfolioCard(state, viewModel, onConverter) }
         if (state.selectedAccount != null) item { BalanceCard(state.selectedAccount, state.lastSyncedAt, state.refreshing) }
+        item { PortfolioCard(state, viewModel, onConverter) }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -339,17 +358,18 @@ private fun Dashboard(
 
 @Composable
 private fun BalanceCard(account: Account?, lastSyncedAt: Instant?, refreshing: Boolean) {
-    Box(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF123F36), Color(0xFF1C6951))))
-            .padding(24.dp),
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp),
+        color = colors.primary, contentColor = colors.onPrimary,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(account?.name ?: "Первый шаг к порядку", color = Color(0xFFD0F1E3), style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(account?.name ?: "Первый шаг к порядку", color = colors.onPrimary.copy(alpha = 0.75f),
+                style = MaterialTheme.typography.titleSmall)
             Text(account?.let { Money.format(it.balanceMinor, it.currency) } ?: "Создайте счёт",
-                color = Color.White, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold,
                 modifier = Modifier.testTag("account_balance"))
-            HorizontalDivider(color = Color.White.copy(alpha = 0.15f))
+            HorizontalDivider(color = colors.onPrimary.copy(alpha = 0.18f))
             Text(
                 when {
                     refreshing -> "Обновляем данные с сервера…"
@@ -357,7 +377,7 @@ private fun BalanceCard(account: Account?, lastSyncedAt: Instant?, refreshing: B
                     account != null -> "Сохранённые данные на устройстве · обновите для проверки"
                     else -> "Карта, наличные или сбережения — выберите свой счёт"
                 },
-                color = Color(0xFFD0F1E3), style = MaterialTheme.typography.bodySmall,
+                color = colors.onPrimary.copy(alpha = 0.75f), style = MaterialTheme.typography.bodySmall,
             )
         }
     }
@@ -368,7 +388,8 @@ private fun TransactionRow(transaction: MoneyTransaction, state: MoneyFlowUiStat
     val income = transaction.kind == "income"
     Card(onClick = onSelectCategory, enabled = !state.working,
         modifier = Modifier.fillMaxWidth().testTag("transaction_${transaction.id}"),
-        shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(42.dp).clip(CircleShape).background(
@@ -397,7 +418,8 @@ private fun TransactionRow(transaction: MoneyTransaction, state: MoneyFlowUiStat
 
 @Composable
 private fun EmptyCard(title: String, body: String) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), shape = RoundedCornerShape(20.dp)) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -410,9 +432,13 @@ private fun MessageCard(message: String, error: Boolean, dismiss: () -> Unit) {
     Surface(
         color = if (error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.primaryContainer,
         contentColor = if (error) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer,
+        border = BorderStroke(1.dp, if (error) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.outlineVariant),
         shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth(),
     ) {
         Row(Modifier.padding(start = 14.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (error) Icons.Outlined.Warning else Icons.Outlined.Info,
+                contentDescription = if (error) "Ошибка" else "Информация", modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
             Text(message, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
             IconButton(onClick = dismiss) { Icon(Icons.Default.Close, contentDescription = "Закрыть сообщение", modifier = Modifier.size(18.dp)) }
         }

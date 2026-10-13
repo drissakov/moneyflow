@@ -6,6 +6,10 @@ The app has Russian UI and supports 11 curated currencies: KZT, USD, EUR, JPY,
 KWD, RUB, GBP, CHF, AUD, CAD and CNY. This is the application's supported catalog,
 not the full upstream provider catalog.
 
+Version 0.2.1 uses a monochrome Material 3 palette in both system light and dark
+themes. The selected balance leads the overview; numbered chart segments match
+the category legend, so reports do not depend on distinguishing shades.
+
 ## Run locally
 
 1. Start the backend on port 8080 using the repository's root instructions.

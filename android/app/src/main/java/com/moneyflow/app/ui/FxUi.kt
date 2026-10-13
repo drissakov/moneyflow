@@ -4,19 +4,21 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -40,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -64,9 +68,10 @@ internal fun CurrencySelector(
     var expanded by rememberSaveable { mutableStateOf(false) }
     Box(modifier) {
         OutlinedButton(onClick = { expanded = true }, enabled = enabled,
-            shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+            shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(label, style = MaterialTheme.typography.labelSmall)
+                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text("${selected.code} · ${selected.title}", maxLines = 2, style = MaterialTheme.typography.bodyMedium)
             }
             Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Выбрать валюту")
@@ -84,26 +89,24 @@ internal fun CurrencySelector(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, openConverter: () -> Unit) {
     val portfolio = state.portfolio
     val stale = portfolio?.ratesStale(state.fxNow) == true
-    Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Весь капитал", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                Text("Весь капитал", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f))
                 if (state.fxRefreshing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
             }
-            CurrencySelector("Основная валюта", SupportedCurrency.fromCode(state.baseCurrency),
-                { viewModel.setBaseCurrency(it.code) }, modifier = Modifier.fillMaxWidth().testTag("base_currency"),
-                enabled = !state.working, tagPrefix = "base")
-            if (state.basePreferencePending) StatusBadge("Выбор сохранён на устройстве · ожидает синхронизации", false)
             when {
                 portfolio?.complete == true -> {
                     Text(Money.format(requireNotNull(portfolio.totalBalanceMinor), state.baseCurrency),
-                        style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("portfolio_total"))
+                        style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.testTag("portfolio_total"))
                 }
                 portfolio != null -> {
                     StatusBadge("Неполная оценка", true)
@@ -125,6 +128,10 @@ internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewMode
                     }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            CurrencySelector("Основная валюта", SupportedCurrency.fromCode(state.baseCurrency),
+                { viewModel.setBaseCurrency(it.code) }, modifier = Modifier.fillMaxWidth().testTag("base_currency"),
+                enabled = !state.working, tagPrefix = "base")
+            if (state.basePreferencePending) StatusBadge("Выбор сохранён на устройстве · ожидает синхронизации", false)
             if (portfolio != null) {
                 if (stale) StatusBadge("Устаревшие курсы · оценка приблизительная", true)
                 else if (state.lastFxConfirmedAt == null) StatusBadge("Сохранённая оценка из кэша", false)
@@ -141,7 +148,7 @@ internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewMode
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Text("Справочная оценка. Остатки счетов сохраняются в исходных валютах.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TextButton(onClick = viewModel::refreshFx, enabled = !state.fxRefreshing,
                     modifier = Modifier.testTag("refresh_fx")) { Text("Обновить курсы") }
                 TextButton(onClick = openConverter, modifier = Modifier.testTag("open_converter")) { Text("Конвертер") }
@@ -154,16 +161,14 @@ internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewMode
 internal fun FxAccountCard(account: Account, state: MoneyFlowUiState, onSelect: () -> Unit) {
     val selected = state.selectedAccountId == account.id
     val estimate = state.portfolio?.accounts?.firstOrNull { it.id == account.id }
-    Card(onClick = onSelect, shape = RoundedCornerShape(16.dp),
-        border = if (selected) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
-        colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface),
-        modifier = Modifier.fillMaxWidth().testTag("account_${account.id}")) {
-        Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                Text(account.name, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 2)
-                Spacer(Modifier.width(8.dp))
-                Text(Money.format(account.balanceMinor, account.currency), fontWeight = FontWeight.Bold)
-            }
+    Card(onClick = onSelect, shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(if (selected) 1.5.dp else 1.dp,
+            if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
+        colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface),
+        modifier = Modifier.fillMaxWidth().testTag("account_${account.id}").semantics { this.selected = selected }) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(account.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(Money.format(account.balanceMinor, account.currency), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             when {
                 account.currency == state.baseCurrency -> Text("${state.baseCurrency} · основная валюта",
                     style = MaterialTheme.typography.labelSmall)
@@ -197,7 +202,7 @@ internal fun ConverterDialog(state: MoneyFlowUiState, viewModel: MoneyFlowViewMo
                 CurrencySelector("В валюту", SupportedCurrency.fromCode(to), { to = it.code; viewModel.clearConversion() },
                     modifier = Modifier.fillMaxWidth().testTag("convert_to"), tagPrefix = "convert_to")
                 OutlinedTextField(amount, { amount = it; viewModel.clearConversion() }, label = { Text("Сумма") },
-                    suffix = { Text(from) }, singleLine = true,
+                    suffix = { Text(from) }, singleLine = true, shape = RoundedCornerShape(16.dp),
                     trailingIcon = { TextButton(onClick = {
                         val value = amount.trim()
                         amount = if (value.startsWith("-")) value.drop(1) else "-$value"
@@ -207,7 +212,8 @@ internal fun ConverterDialog(state: MoneyFlowUiState, viewModel: MoneyFlowViewMo
                     modifier = Modifier.fillMaxWidth().testTag("convert_amount"))
                 state.conversionError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
                 state.conversion?.let { result ->
-                    Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(16.dp)) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, contentColor = MaterialTheme.colorScheme.onSurface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), shape = RoundedCornerShape(16.dp)) {
                         Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(Money.format(result.convertedAmountMinor, result.toCurrency),
                                 style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
@@ -240,8 +246,13 @@ internal fun ConverterDialog(state: MoneyFlowUiState, viewModel: MoneyFlowViewMo
 @Composable
 private fun StatusBadge(text: String, warning: Boolean) {
     Surface(color = if (warning) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
-        shape = RoundedCornerShape(8.dp)) {
-        Text(text, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp))
+        contentColor = if (warning) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+        border = BorderStroke(1.dp, if (warning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outlineVariant),
+        shape = RoundedCornerShape(10.dp)) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (warning) Icon(Icons.Default.Warning, contentDescription = null, modifier = Modifier.size(16.dp))
+            Text(text, style = MaterialTheme.typography.labelSmall)
+        }
     }
 }
 
