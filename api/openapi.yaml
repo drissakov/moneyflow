@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: MoneyFlow API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Android MVP API. PostgreSQL is the authoritative store. All authenticated
     reads and writes are scoped to the authenticated user; a client cannot send
@@ -14,8 +14,10 @@ info:
     limited to 1,000,000,000,000,000 minor units. Calculated balances use signed
     64-bit integers. Writes that would overflow a balance are rejected atomically.
 
-    Requests contain one JSON object, reject unknown fields, and have a 16 KiB
-    body limit. RFC3339 timestamps include a timezone. Authentication tokens are
+    Requests contain one JSON object and reject unknown fields. Ordinary writes
+    have a 16 KiB body limit; normalized statement import writes allow 2 MiB and
+    at most 2000 rows. Original PDF files are parsed on Android and never uploaded
+    to this API. RFC3339 timestamps include a timezone. Authentication tokens are
     opaque bearer credentials with an expiry; logout revokes the current token.
 
     Frankfurter v2 supplies daily reference rates, cached persistently in
@@ -36,6 +38,7 @@ tags:
   - name: Transactions
   - name: Categories
   - name: Analytics
+  - name: Statement imports
   - name: Currencies
   - name: Preferences
   - name: Portfolio
@@ -663,8 +666,174 @@ paths:
           $ref: '#/components/responses/InternalError'
         '504':
           $ref: '#/components/responses/RequestTimeout'
+  /api/v1/imports/preview:
+    post:
+      tags: [Statement imports]
+      operationId: previewStatementImport
+      summary: Validate normalized PDF rows and identify duplicates without changing the ledger
+      description: |
+        Supports the Kaspi/Halyk KZT templates parsed on Android. Stores an
+        owner-scoped draft for 24 hours. Exact duplicates refer to a currently
+        existing imported transaction with the same account, file SHA-256 and
+        source row ID. Date/direction/amount matches in the full ledger are only
+        possible duplicates; identical genuine purchases remain separate rows.
+        Opening and closing statement balances are informational and do not
+        change an existing account's opening balance.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatementPreviewRequest'
+      responses:
+        '201':
+          description: Draft created; no financial transactions were added.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatementPreview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/ImportPayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/imports:
+    get:
+      tags: [Statement imports]
+      operationId: listStatementImports
+      summary: List the current user's import history
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Import metadata, newest first; normalized row payloads are omitted.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imports]
+                properties:
+                  imports:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/StatementImportReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/imports/{id}/commit:
+    post:
+      tags: [Statement imports]
+      operationId: commitStatementImport
+      summary: Atomically save the selected rows after review
+      description: |
+        The owner, account, categories, balance range and live duplicate set are
+        checked again while the account is locked. Exact selected duplicates or
+        possible duplicates without explicit permission reject the entire batch.
+        A changed candidate set requires a fresh preview. Repeating the same
+        request and Idempotency-Key returns the saved receipt. Changing an
+        already committed selection conflicts; an undone import cannot be
+        recreated by replaying its old commit. exclude_from_analytics is an
+        explicit user classification for own-account transfers/cash movements:
+        the row still affects the account balance but is omitted from charts.
+      parameters:
+        - $ref: '#/components/parameters/StatementImportID'
+        - $ref: '#/components/parameters/StatementImportKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatementCommitRequest'
+      responses:
+        '201':
+          description: All selected rows saved, or the original successful receipt replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatementImportReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StatementImportConflict'
+        '410':
+          $ref: '#/components/responses/StatementImportExpired'
+        '413':
+          $ref: '#/components/responses/ImportPayloadTooLarge'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+  /api/v1/imports/{id}/undo:
+    post:
+      tags: [Statement imports]
+      operationId: undoStatementImport
+      summary: Remove only the ledger rows created by this import
+      description: |
+        Requires an explicit user confirmation in the app. Deletes only this
+        user's imported transaction IDs in one transaction and recalculates the
+        balance; the account's opening balance and unrelated operations remain
+        untouched. Keeps import history. Repeating undo is safe. A fresh import
+        may intentionally import the same source again after undo.
+      parameters:
+        - $ref: '#/components/parameters/StatementImportID'
+        - $ref: '#/components/parameters/StatementImportKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        '200':
+          description: Undone import receipt with the updated balance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatementImportReceipt'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StatementImportConflict'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
 components:
   parameters:
+    StatementImportID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    StatementImportKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: One UUID; retain the exact key and payload after an uncertain network response.
+      schema:
+        type: string
+        format: uuid
     BaseCurrency:
       name: base
       in: query
@@ -686,6 +855,24 @@ components:
           schema:
             $ref: '#/components/schemas/Credentials'
   responses:
+    ImportPayloadTooLarge:
+      description: Normalized import JSON exceeds 2 MiB; raw PDF uploads are unsupported.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StatementImportConflict:
+      description: Duplicate, changed preview, incompatible import state, reused key with a changed request, or ledger balance overflow; no partial batch was committed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StatementImportExpired:
+      description: The draft has expired; obtain a new preview before committing.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     RatesUnavailable:
       description: No usable rate is available for this conversion; error.code is rates_unavailable.
       content:
@@ -1166,6 +1353,10 @@ components:
           $ref: '#/components/schemas/TransactionKind'
         category_id:
           $ref: '#/components/schemas/NullableCategoryID'
+        exclude_from_analytics:
+          type: boolean
+          default: false
+          description: Explicit imported own-account/cash movement. Affects the ledger balance but is omitted from income/expense analytics. Omitted when false.
         amount_minor:
           $ref: '#/components/schemas/PositiveMinorAmount'
         currency:
@@ -1178,6 +1369,192 @@ components:
         created_at:
           type: string
           format: date-time
+    StatementBank:
+      type: string
+      enum: [kaspi, halyk]
+    StatementRowInput:
+      type: object
+      additionalProperties: false
+      required: [row_id, occurred_at, kind, amount_minor, note]
+      properties:
+        row_id:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: Stable source row ID within the parsed file; duplicate IDs are rejected.
+        occurred_at:
+          type: string
+          format: date-time
+          description: The bank operation date converted using the statement's timezone.
+        kind:
+          $ref: '#/components/schemas/TransactionKind'
+        amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        note:
+          type: string
+          maxLength: 500
+    StatementPreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [account_id, bank, currency, file_sha256, timezone, rows]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        bank:
+          $ref: '#/components/schemas/StatementBank'
+        currency:
+          type: string
+          enum: [KZT]
+        file_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        timezone:
+          type: string
+          minLength: 1
+          maxLength: 100
+          example: Asia/Qyzylorda
+        opening_balance_minor:
+          type: string
+          nullable: true
+          description: Optional canonical signed int64 statement opening balance; informational.
+        closing_balance_minor:
+          type: string
+          nullable: true
+          description: Optional canonical signed int64 statement closing balance; informational.
+        rows:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items:
+            $ref: '#/components/schemas/StatementRowInput'
+    StatementPreviewRow:
+      type: object
+      additionalProperties: false
+      required: [row_id, occurred_at, kind, amount_minor, note, duplicate, matching_count]
+      properties:
+        row_id:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        occurred_at:
+          type: string
+          format: date-time
+        kind:
+          $ref: '#/components/schemas/TransactionKind'
+        amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        note:
+          type: string
+          maxLength: 500
+        duplicate:
+          type: string
+          enum: [new, possible, exact]
+        matching_count:
+          type: integer
+          format: int64
+          minimum: 0
+    StatementPreview:
+      type: object
+      required: [id, account_id, bank, currency, status, expires_at, balance_before_minor, opening_balance_minor, closing_balance_minor, rows]
+      properties:
+        id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        bank:
+          $ref: '#/components/schemas/StatementBank'
+        currency:
+          type: string
+          enum: [KZT]
+        status:
+          type: string
+          enum: [draft]
+        expires_at:
+          type: string
+          format: date-time
+        balance_before_minor:
+          $ref: '#/components/schemas/CalculatedMinorBalance'
+        opening_balance_minor:
+          type: string
+          nullable: true
+        closing_balance_minor:
+          type: string
+          nullable: true
+        rows:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items:
+            $ref: '#/components/schemas/StatementPreviewRow'
+    StatementCommitRequest:
+      type: object
+      additionalProperties: false
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          minItems: 1
+          maxItems: 2000
+          items:
+            type: object
+            additionalProperties: false
+            required: [row_id]
+            properties:
+              row_id:
+                type: integer
+                minimum: 1
+                maximum: 2147483647
+              category_id:
+                $ref: '#/components/schemas/NullableCategoryID'
+              allow_possible_duplicate:
+                type: boolean
+                default: false
+                description: Explicitly confirm a possible duplicate after reviewing it.
+              exclude_from_analytics:
+                type: boolean
+                default: false
+                description: Explicitly classify this row as an own-account/cash movement, preserving its effect on the balance.
+    StatementImportReceipt:
+      type: object
+      required: [id, account_id, bank, status, imported_count, skipped_count, balance_minor, created_at, committed_at, undone_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        bank:
+          $ref: '#/components/schemas/StatementBank'
+        status:
+          type: string
+          enum: [draft, committed, undone]
+        imported_count:
+          type: integer
+          minimum: 0
+          maximum: 2000
+          description: Original committed count; retained after undo.
+        skipped_count:
+          type: integer
+          minimum: 0
+          maximum: 2000
+          description: Source rows not selected for the committed import.
+        balance_minor:
+          $ref: '#/components/schemas/CalculatedMinorBalance'
+        created_at:
+          type: string
+          format: date-time
+        committed_at:
+          type: string
+          format: date-time
+          nullable: true
+        undone_at:
+          type: string
+          format: date-time
+          nullable: true
     Error:
       type: object
       required: [error]

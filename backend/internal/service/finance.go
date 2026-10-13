@@ -27,15 +27,16 @@ type AccountView struct {
 }
 
 type TransactionView struct {
-	ID          string    `json:"id"`
-	AccountID   string    `json:"account_id"`
-	Kind        string    `json:"kind"`
-	AmountMinor string    `json:"amount_minor"`
-	Currency    string    `json:"currency"`
-	Note        string    `json:"note"`
-	OccurredAt  time.Time `json:"occurred_at"`
-	CreatedAt   time.Time `json:"created_at"`
-	CategoryID  *string   `json:"category_id"`
+	ID                   string    `json:"id"`
+	AccountID            string    `json:"account_id"`
+	Kind                 string    `json:"kind"`
+	AmountMinor          string    `json:"amount_minor"`
+	Currency             string    `json:"currency"`
+	Note                 string    `json:"note"`
+	OccurredAt           time.Time `json:"occurred_at"`
+	CreatedAt            time.Time `json:"created_at"`
+	CategoryID           *string   `json:"category_id"`
+	ExcludeFromAnalytics bool      `json:"exclude_from_analytics,omitempty"`
 }
 
 func (s *Service) CreateAccount(ctx context.Context, userID, name, currency, opening string) (AccountView, error) {
@@ -80,7 +81,7 @@ func (s *Service) Accounts(ctx context.Context, userID string) ([]AccountView, e
 func transactionView(t model.Transaction) TransactionView {
 	return TransactionView{
 		ID: t.ID, AccountID: t.AccountID, Kind: t.Kind, AmountMinor: strconv.FormatInt(t.AmountMinor, 10),
-		Currency: t.Currency, Note: t.Note, OccurredAt: t.OccurredAt, CreatedAt: t.CreatedAt, CategoryID: t.CategoryID,
+		Currency: t.Currency, Note: t.Note, OccurredAt: t.OccurredAt, CreatedAt: t.CreatedAt, CategoryID: t.CategoryID, ExcludeFromAnalytics: t.ExcludeFromAnalytics,
 	}
 }
 

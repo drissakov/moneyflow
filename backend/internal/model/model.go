@@ -29,16 +29,17 @@ type Account struct {
 }
 
 type Transaction struct {
-	ID          string `gorm:"type:uuid;primaryKey"`
-	UserID      string `gorm:"type:uuid"`
-	AccountID   string `gorm:"type:uuid"`
-	Kind        string
-	AmountMinor int64
-	Currency    string
-	Note        string
-	OccurredAt  time.Time
-	CreatedAt   time.Time
-	CategoryID  *string `gorm:"type:uuid"`
+	ID                   string `gorm:"type:uuid;primaryKey"`
+	UserID               string `gorm:"type:uuid"`
+	AccountID            string `gorm:"type:uuid"`
+	Kind                 string
+	AmountMinor          int64
+	Currency             string
+	Note                 string
+	OccurredAt           time.Time
+	CreatedAt            time.Time
+	CategoryID           *string `gorm:"type:uuid"`
+	ExcludeFromAnalytics bool
 }
 
 type Category struct {

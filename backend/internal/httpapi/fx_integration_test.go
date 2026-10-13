@@ -157,8 +157,18 @@ func TestIntegrationFXPreferencesPortfolioAndOwnerIsolation(t *testing.T) {
 	expectStatus(t, request(f.router, "POST", "/api/v1/convert", user.AccessToken, "", map[string]string{"from_currency": "BTC", "to_currency": "USD", "amount_minor": "1"}), 400)
 	// Account balances and transaction currency stay in their original units.
 	accounts, err := f.service.Accounts(context.Background(), user.User.ID)
-	if err != nil || len(accounts) != 5 || accounts[1].BalanceMinor != "100" {
+	if err != nil || len(accounts) != 5 {
 		t.Fatal("conversion changed the ledger")
+	}
+	var usd *service.AccountView
+	for i := range accounts {
+		if accounts[i].Currency == "USD" {
+			usd = &accounts[i]
+			break
+		}
+	}
+	if usd == nil || usd.BalanceMinor != "100" {
+		t.Fatal("conversion changed the USD ledger balance")
 	}
 }
 

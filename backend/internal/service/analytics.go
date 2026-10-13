@@ -161,6 +161,7 @@ func (s *Service) Analytics(ctx context.Context, userID, month, currency, timezo
 		FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
 		LEFT JOIN categories p ON p.id = c.parent_id
 		WHERE t.user_id = ? AND t.currency = ? AND t.occurred_at >= ? AND t.occurred_at < ?
+		AND NOT t.exclude_from_analytics
 		GROUP BY t.kind, t.category_id, c.name, c.parent_id, p.name`, userID, currency, start, end).Scan(&rows).Error
 	if err != nil {
 		return AnalyticsView{}, err

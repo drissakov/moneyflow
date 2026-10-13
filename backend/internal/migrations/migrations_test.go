@@ -134,6 +134,14 @@ func TestIntegrationMulticurrencyMigrationPreservesExistingLedger(t *testing.T) 
 	if sessionCount != 1 {
 		t.Fatal("migration invalidated existing session")
 	}
+	var excluded bool
+	if err := db.Raw("SELECT exclude_from_analytics FROM transactions WHERE id=?", transaction).Scan(&excluded).Error; err != nil || excluded {
+		t.Fatal("import migration changed old transaction analytics behavior")
+	}
+	var importCount int64
+	if err := db.Raw("SELECT count(*) FROM statement_imports").Scan(&importCount).Error; err != nil || importCount != 0 {
+		t.Fatal("import migration did not create empty metadata safely")
+	}
 	for _, currency := range []string{"RUB", "GBP", "CHF", "AUD", "CAD", "CNY"} {
 		newAccount := uuid.NewString()
 		if err := db.Exec("INSERT INTO accounts(id,user_id,name,currency,opening_balance_minor,created_at) VALUES(?,?,'New currency',?,0,now())", newAccount, user, currency).Error; err != nil {

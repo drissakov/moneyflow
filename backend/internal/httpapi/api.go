@@ -74,6 +74,11 @@ func New(s *service.Service, opts Options) (*gin.Engine, error) {
 	private.GET("/exchange-rates", a.exchangeRates)
 	private.POST("/convert", a.convert)
 	private.GET("/portfolio", a.portfolio)
+	imports := private.Group("/imports", a.cleanupImports())
+	imports.POST("/preview", a.previewImport)
+	imports.POST("/:id/commit", a.commitImport)
+	imports.POST("/:id/undo", a.undoImport)
+	imports.GET("", a.imports)
 	return router, nil
 }
 
@@ -133,29 +138,37 @@ func (a *API) respondError(c *gin.Context, err error) {
 }
 
 func decode(c *gin.Context, dst any) bool {
+	return decodeWithLimit(c, dst, maxBodyBytes)
+}
+
+func decodeWithLimit(c *gin.Context, dst any, limit int64) bool {
 	mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		fail(c, 415, "invalid_content_type", "Content-Type must be application/json.")
 		return false
 	}
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBodyBytes)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
 	decoder := json.NewDecoder(c.Request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
-		decodeError(c, err)
+		decodeErrorWithLimit(c, err, limit)
 		return false
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		decodeError(c, err)
+		decodeErrorWithLimit(c, err, limit)
 		return false
 	}
 	return true
 }
 
 func decodeError(c *gin.Context, err error) {
+	decodeErrorWithLimit(c, err, maxBodyBytes)
+}
+
+func decodeErrorWithLimit(c *gin.Context, err error, limit int64) {
 	var maxBytes *http.MaxBytesError
 	if errors.As(err, &maxBytes) {
-		fail(c, 413, "payload_too_large", "JSON body must be at most 16384 bytes.")
+		fail(c, 413, "payload_too_large", fmt.Sprintf("JSON body must be at most %d bytes.", limit))
 		return
 	}
 	fail(c, 400, "invalid_request", "Body must contain one valid JSON object with only documented fields.")
