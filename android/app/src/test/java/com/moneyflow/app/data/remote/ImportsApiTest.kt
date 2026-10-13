@@ -7,27 +7,36 @@ import okhttp3.mockwebserver.SocketPolicy
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.IOException
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 class ImportsApiTest {
     private val id = "74b729ee-1188-419c-9b47-8c39e63181d4"
 
     @Test fun `lost commit response retries exactly the same key body and captured authorization`() = runBlocking {
-        val server = MockWebServer().apply { start() }
+        // Pin both ends to IPv4: CI's localhost DNS may prefer ::1 while the server binds IPv4.
+        val server = MockWebServer().apply { start(InetAddress.getByName("127.0.0.1"), 0) }
         try {
             server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
-            server.enqueue(MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody(
-                """{"id":"$id","account_id":"74b729ee-1188-419c-9b47-8c39e63181d5","bank":"kaspi","status":"committed","imported_count":1,"skipped_count":1,"balance_minor":"-100","created_at":"2026-01-01T00:00:00Z","committed_at":"2026-01-01T00:00:01Z"}"""))
-            val api = ApiFactory.createImports(server.url("/").toString()) { "different-current-user" }
+            val baseUrl = "http://127.0.0.1:${server.port}/"
+            val api = ApiFactory.createImports(baseUrl) { "different-current-user" }
             val request = ImportCommitRequest(listOf(ImportSelectionRow(1, null, false, true)))
             val key = "74b729ee-1188-419c-9b47-8c39e63181d6"
             try { api.commit(id, request, key, "Bearer captured-user"); fail("Expected response loss") } catch (_: IOException) { }
-            api.commit(id, request, key, "Bearer captured-user").validated()
-            val first = server.takeRequest(1, TimeUnit.SECONDS)!!; val second = server.takeRequest(1, TimeUnit.SECONDS)!!
+            // Prove the entire first POST reached the server; connection refusal is not response loss.
+            val first = requireNotNull(server.takeRequest(5, TimeUnit.SECONDS)) { "The server did not receive the original commit" }
+            server.enqueue(MockResponse().setResponseCode(201).setHeader("Content-Type", "application/json").setBody(
+                """{"id":"$id","account_id":"74b729ee-1188-419c-9b47-8c39e63181d5","bank":"kaspi","status":"committed","imported_count":1,"skipped_count":1,"balance_minor":"-100","created_at":"2026-01-01T00:00:00Z","committed_at":"2026-01-01T00:00:01Z"}"""))
+            // A new client models reopening the app with its saved confirmation, without pooled-socket races.
+            val resumedApi = ApiFactory.createImports(baseUrl) { "different-current-user" }
+            resumedApi.commit(id, request, key, "Bearer captured-user").validated()
+            val second = requireNotNull(server.takeRequest(5, TimeUnit.SECONDS)) { "The server did not receive the replay" }
             assertEquals("/api/v1/imports/$id/commit", first.path)
             assertEquals(key, first.getHeader("Idempotency-Key")); assertEquals(key, second.getHeader("Idempotency-Key"))
+            assertEquals("Bearer captured-user", first.getHeader("Authorization"))
             assertEquals("Bearer captured-user", second.getHeader("Authorization"))
             assertEquals(first.body.readUtf8(), second.body.readUtf8())
+            assertEquals(2, server.requestCount) // Neither client may silently retry a financial POST.
         } finally { server.shutdown() }
     }
 
