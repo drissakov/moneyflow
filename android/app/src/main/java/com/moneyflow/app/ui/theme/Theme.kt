@@ -10,10 +10,12 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.moneyflow.app.R
 
 // Set every Material role so dialogs, menus and navigation stay monochrome too.
 private val LightColors = lightColorScheme(
@@ -94,27 +96,56 @@ private val DarkColors = darkColorScheme(
     surfaceContainerLowest = Color(0xFF0C0C0C),
 )
 
+// Offline fonts contain Russian, the full Kazakh Cyrillic alphabet and the tenge sign.
+private val Inter = FontFamily(
+    Font(R.font.inter_regular, FontWeight.Normal),
+    Font(R.font.inter_medium, FontWeight.Medium),
+    Font(R.font.inter_semibold, FontWeight.SemiBold),
+    Font(R.font.inter_bold, FontWeight.Bold),
+)
+
+private val InterDisplay = FontFamily(
+    Font(R.font.inter_display_semibold, FontWeight.SemiBold),
+    Font(R.font.inter_display_bold, FontWeight.Bold),
+)
+
 private val MoneyFlowTypography = Typography(
-    headlineLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold,
-        fontSize = 32.sp, lineHeight = 38.sp, letterSpacing = (-0.8).sp),
-    headlineMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold,
-        fontSize = 28.sp, lineHeight = 34.sp, letterSpacing = (-0.6).sp),
-    headlineSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold,
-        fontSize = 24.sp, lineHeight = 30.sp, letterSpacing = (-0.4).sp),
-    titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold,
-        fontSize = 20.sp, lineHeight = 26.sp, letterSpacing = (-0.3).sp),
-    titleMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold,
-        fontSize = 16.sp, lineHeight = 22.sp),
-    titleSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
+    displayLarge = TextStyle(fontFamily = InterDisplay, fontWeight = FontWeight.Bold,
+        fontSize = 52.sp, lineHeight = 60.sp, letterSpacing = (-1.4).sp,
+        fontFeatureSettings = "tnum"),
+    displayMedium = TextStyle(fontFamily = InterDisplay, fontWeight = FontWeight.Bold,
+        fontSize = 42.sp, lineHeight = 50.sp, letterSpacing = (-1.1).sp,
+        fontFeatureSettings = "tnum"),
+    displaySmall = TextStyle(fontFamily = InterDisplay, fontWeight = FontWeight.SemiBold,
+        fontSize = 36.sp, lineHeight = 44.sp, letterSpacing = (-0.9).sp,
+        fontFeatureSettings = "tnum"),
+    headlineLarge = TextStyle(fontFamily = InterDisplay, fontWeight = FontWeight.Bold,
+        fontSize = 32.sp, lineHeight = 40.sp, letterSpacing = (-0.7).sp,
+        fontFeatureSettings = "tnum"),
+    headlineMedium = TextStyle(fontFamily = InterDisplay, fontWeight = FontWeight.Bold,
+        fontSize = 28.sp, lineHeight = 36.sp, letterSpacing = (-0.5).sp,
+        fontFeatureSettings = "tnum"),
+    headlineSmall = TextStyle(fontFamily = InterDisplay, fontWeight = FontWeight.SemiBold,
+        fontSize = 24.sp, lineHeight = 32.sp, letterSpacing = (-0.3).sp,
+        fontFeatureSettings = "tnum"),
+    titleLarge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+        fontSize = 20.sp, lineHeight = 28.sp, letterSpacing = (-0.2).sp,
+        fontFeatureSettings = "tnum"),
+    titleMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp, lineHeight = 24.sp, fontFeatureSettings = "tnum"),
+    titleSmall = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium,
+        fontSize = 14.sp, lineHeight = 20.sp, fontFeatureSettings = "tnum"),
+    bodyLarge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal,
+        fontSize = 16.sp, lineHeight = 24.sp),
+    bodyMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal,
+        fontSize = 14.sp, lineHeight = 22.sp),
+    bodySmall = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal,
+        fontSize = 12.sp, lineHeight = 18.sp),
+    labelLarge = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold,
         fontSize = 14.sp, lineHeight = 20.sp),
-    bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, lineHeight = 24.sp),
-    bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, lineHeight = 20.sp),
-    bodySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, lineHeight = 18.sp),
-    labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp, lineHeight = 20.sp),
-    labelMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
-        fontSize = 12.sp, lineHeight = 16.sp),
-    labelSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Medium,
+    labelMedium = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium,
+        fontSize = 12.sp, lineHeight = 18.sp),
+    labelSmall = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium,
         fontSize = 11.sp, lineHeight = 16.sp),
 )
 

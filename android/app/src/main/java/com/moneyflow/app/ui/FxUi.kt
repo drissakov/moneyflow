@@ -30,6 +30,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -40,10 +41,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,10 +56,12 @@ import com.moneyflow.app.data.domain.Account
 import com.moneyflow.app.data.domain.Money
 import com.moneyflow.app.data.domain.SupportedCurrency
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun CurrencySelector(
     label: String,
@@ -77,7 +83,7 @@ internal fun CurrencySelector(
             Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Выбрать валюту")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
-            modifier = Modifier.heightIn(max = 350.dp)) {
+            modifier = Modifier.heightIn(max = 350.dp).semantics { testTagsAsResourceId = true }) {
             SupportedCurrency.entries.forEach { currency ->
                 DropdownMenuItem(
                     text = { Text("${currency.code} · ${currency.title}") },
@@ -89,32 +95,60 @@ internal fun CurrencySelector(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalComposeUiApi::class)
 @Composable
 internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewModel, openConverter: () -> Unit) {
     val portfolio = state.portfolio
     val stale = portfolio?.ratesStale(state.fxNow) == true
-    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val colors = MaterialTheme.colorScheme
+    val dates = portfolio?.accounts.orEmpty().mapNotNull { it.rateDate }.distinct().sorted()
+    val usesRates = dates.isNotEmpty()
+    var currencyMenu by rememberSaveable { mutableStateOf(false) }
+    var details by rememberSaveable { mutableStateOf(false) }
+    val accountCount = state.accounts.size
+    val currencyCount = state.accounts.map { it.currency }.distinct().size
+    val countLabel = "$accountCount ${countWord(accountCount, "счёт", "счёта", "счетов")} · $currencyCount ${countWord(currencyCount, "валюта", "валюты", "валют")}"
+    Surface(shape = RoundedCornerShape(24.dp), color = colors.primary, contentColor = colors.onPrimary,
+        modifier = Modifier.fillMaxWidth().testTag("portfolio_card")) {
+        Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Весь капитал", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                Text("Общий баланс", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f))
-                if (state.fxRefreshing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                Box {
+                    OutlinedButton(onClick = { currencyMenu = true }, enabled = !state.working,
+                        shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onPrimary,
+                            disabledContentColor = colors.onPrimary.copy(alpha = 0.45f)),
+                        border = BorderStroke(1.dp, colors.onPrimary.copy(alpha = 0.35f)),
+                        modifier = Modifier.testTag("base_currency").semantics {
+                            contentDescription = "Валюта общего баланса: ${state.baseCurrency}. Изменить валюту"
+                        }) {
+                        Text(state.baseCurrency, style = MaterialTheme.typography.labelLarge)
+                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.size(20.dp))
+                    }
+                    DropdownMenu(currencyMenu, onDismissRequest = { currencyMenu = false },
+                        modifier = Modifier.semantics { testTagsAsResourceId = true }) {
+                        SupportedCurrency.entries.forEach { currency ->
+                            DropdownMenuItem(text = { Text("${currency.code} · ${currency.title}") },
+                                onClick = { currencyMenu = false; viewModel.setBaseCurrency(currency.code) },
+                                modifier = Modifier.testTag("base_${currency.code}"))
+                        }
+                    }
+                }
             }
             when {
                 portfolio?.complete == true -> {
-                    Text(Money.format(requireNotNull(portfolio.totalBalanceMinor), state.baseCurrency),
-                        style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.testTag("portfolio_total"))
+                    Text((if (usesRates) "≈ " else "") + Money.format(requireNotNull(portfolio.totalBalanceMinor), state.baseCurrency),
+                        style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.testTag("portfolio_total"))
                 }
                 portfolio != null -> {
                     StatusBadge("Неполная оценка", true)
                     Text("Учтённая часть: ${Money.format(portfolio.partialBalanceMinor, state.baseCurrency)}",
                         style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
                         modifier = Modifier.testTag("portfolio_partial"))
-                    Text("Без курсов: ${portfolio.missingCurrencies.joinToString()}. Общий итог недоступен.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Нет курса для ${portfolio.missingCurrencies.joinToString()}. Эта сумма не включает все счета.",
+                        style = MaterialTheme.typography.bodySmall, color = colors.onPrimary.copy(alpha = 0.8f))
                 }
                 else -> {
                     Text("Оценка недоступна", style = MaterialTheme.typography.titleMedium,
@@ -123,38 +157,71 @@ internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewMode
                         !state.accountsLoaded -> "Загружаем счета…"
                         state.cachedPortfolio?.portfolio?.ratesExpired(state.fxNow) == true -> "Сохранённые курсы старше 7 дней. Обновите оценку."
                         state.cachedPortfolio != null -> "Остатки изменились. Нужна оценка для актуальных счетов."
-                        state.fxRefreshing -> "Запрашиваем справочные курсы Frankfurter…"
-                        else -> "Обновите курсы. Остатки счетов доступны в исходных валютах."
-                    }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        state.fxRefreshing -> "Пересчитываем все счета…"
+                        else -> "Обновите баланс. Остатки счетов доступны ниже."
+                    }, style = MaterialTheme.typography.bodySmall, color = colors.onPrimary.copy(alpha = 0.8f))
                 }
             }
-            CurrencySelector("Основная валюта", SupportedCurrency.fromCode(state.baseCurrency),
-                { viewModel.setBaseCurrency(it.code) }, modifier = Modifier.fillMaxWidth().testTag("base_currency"),
-                enabled = !state.working, tagPrefix = "base")
+            Text(countLabel, style = MaterialTheme.typography.bodyMedium, color = colors.onPrimary.copy(alpha = 0.78f))
             if (state.basePreferencePending) StatusBadge("Выбор сохранён на устройстве · ожидает синхронизации", false)
             if (portfolio != null) {
                 if (stale) StatusBadge("Устаревшие курсы · оценка приблизительная", true)
                 else if (state.lastFxConfirmedAt == null) StatusBadge("Сохранённая оценка из кэша", false)
-                val dates = portfolio.accounts.mapNotNull { it.rateDate }.distinct().sorted()
-                Text(if (dates.isEmpty() && !portfolio.complete) "Frankfurter · доступных внешних котировок нет" else
-                    if (dates.isEmpty()) "Пересчёт в своей валюте без внешней котировки" else
-                    "Frankfurter · даты котировок: ${dates.joinToString()}",
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                portfolio.fetchedAt?.let { Text("Курсы получены: ${fxTimestamp(it)}",
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Text(when {
+                    !portfolio.complete && dates.isEmpty() -> "Курсы конвертации недоступны"
+                    dates.isEmpty() -> "Все счета в ${state.baseCurrency} · конвертация не нужна"
+                    else -> "Frankfurter · курсы ${rateDatesLabel(dates)}"
+                }, style = MaterialTheme.typography.labelSmall, color = colors.onPrimary.copy(alpha = 0.78f))
             }
-            state.fxError?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.testTag("fx_error")) }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Text("Справочная оценка. Остатки счетов сохраняются в исходных валютах.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            state.fxError?.let {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(Icons.Default.Warning, contentDescription = "Ошибка обновления", modifier = Modifier.size(18.dp))
+                    Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).testTag("fx_error"))
+                }
+            }
+            HorizontalDivider(color = colors.onPrimary.copy(alpha = 0.18f))
+            FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = viewModel::refreshFx, enabled = !state.fxRefreshing,
+                    colors = ButtonDefaults.textButtonColors(contentColor = colors.onPrimary,
+                        disabledContentColor = colors.onPrimary.copy(alpha = 0.45f)),
                     modifier = Modifier.testTag("refresh_fx")) { Text("Обновить курсы") }
-                TextButton(onClick = openConverter, modifier = Modifier.testTag("open_converter")) { Text("Конвертер") }
+                TextButton(onClick = openConverter, colors = ButtonDefaults.textButtonColors(contentColor = colors.onPrimary),
+                    modifier = Modifier.testTag("open_converter")) { Text("Конвертер") }
+                if (state.fxRefreshing) CircularProgressIndicator(Modifier.size(20.dp), color = colors.onPrimary, strokeWidth = 2.dp)
+            }
+            TextButton(onClick = { details = !details }, colors = ButtonDefaults.textButtonColors(contentColor = colors.onPrimary.copy(alpha = 0.78f)),
+                modifier = Modifier.testTag("portfolio_details")) { Text(if (details) "Скрыть расчёт" else "Как рассчитан баланс", style = MaterialTheme.typography.labelMedium) }
+            if (details) {
+                Text("Остаток каждого счёта пересчитывается в ${state.baseCurrency}, затем суммы складываются. Выбор счёта для операций не меняет общий итог.",
+                    style = MaterialTheme.typography.bodySmall, color = colors.onPrimary.copy(alpha = 0.8f))
+                Text("Справочная оценка по ежедневным курсам. Курс обмена в вашем банке может отличаться; деньги на счетах остаются в исходных валютах.",
+                    style = MaterialTheme.typography.bodySmall, color = colors.onPrimary.copy(alpha = 0.8f))
+                portfolio?.fetchedAt?.let { Text("Курсы получены: ${fxTimestamp(it)}", style = MaterialTheme.typography.labelSmall,
+                    color = colors.onPrimary.copy(alpha = 0.78f)) }
+                portfolio?.accounts?.forEach { account ->
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(account.name, style = MaterialTheme.typography.labelLarge)
+                        Text("${Money.format(account.balanceMinor, account.currency)} → ${account.convertedBalanceMinor?.let { Money.format(it, state.baseCurrency) } ?: "нет курса"}",
+                            style = MaterialTheme.typography.bodySmall, color = colors.onPrimary.copy(alpha = 0.8f))
+                    }
+                }
             }
         }
     }
+}
+
+private fun countWord(count: Int, one: String, few: String, many: String): String = when {
+    count % 100 in 11..14 -> many
+    count % 10 == 1 -> one
+    count % 10 in 2..4 -> few
+    else -> many
+}
+
+private fun rateDatesLabel(dates: List<String>): String {
+    val format = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+    val first = LocalDate.parse(dates.first()).format(format)
+    return if (dates.size == 1) first else "$first — ${LocalDate.parse(dates.last()).format(format)}"
 }
 
 @Composable

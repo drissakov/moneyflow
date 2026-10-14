@@ -297,11 +297,10 @@ private fun Dashboard(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Мои финансы", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("Небольшие записи. Большая ясность.", style = MaterialTheme.typography.bodyMedium,
+                Text("Все счета — в одном балансе.", style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        if (state.selectedAccount != null) item { BalanceCard(state.selectedAccount, state.lastSyncedAt, state.refreshing) }
         item { PortfolioCard(state, viewModel, onConverter) }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -339,6 +338,7 @@ private fun Dashboard(
             }
         } }
         if (state.selectedAccount != null) {
+            item { BalanceCard(state.selectedAccount, state.lastSyncedAt, state.refreshing) }
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Последние операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -360,16 +360,16 @@ private fun Dashboard(
 private fun BalanceCard(account: Account?, lastSyncedAt: Instant?, refreshing: Boolean) {
     val colors = MaterialTheme.colorScheme
     Surface(
-        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(24.dp),
-        color = colors.primary, contentColor = colors.onPrimary,
+        modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
+        color = colors.surface, contentColor = colors.onSurface,
+        border = BorderStroke(1.dp, colors.outlineVariant),
     ) {
-        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(account?.name ?: "Первый шаг к порядку", color = colors.onPrimary.copy(alpha = 0.75f),
-                style = MaterialTheme.typography.titleSmall)
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Выбранный счёт", color = colors.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
+            Text(account?.name ?: "Создайте счёт", style = MaterialTheme.typography.titleMedium)
             Text(account?.let { Money.format(it.balanceMinor, it.currency) } ?: "Создайте счёт",
-                style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.testTag("account_balance"))
-            HorizontalDivider(color = colors.onPrimary.copy(alpha = 0.18f))
             Text(
                 when {
                     refreshing -> "Обновляем данные с сервера…"
@@ -377,7 +377,7 @@ private fun BalanceCard(account: Account?, lastSyncedAt: Instant?, refreshing: B
                     account != null -> "Сохранённые данные на устройстве · обновите для проверки"
                     else -> "Карта, наличные или сбережения — выберите свой счёт"
                 },
-                color = colors.onPrimary.copy(alpha = 0.75f), style = MaterialTheme.typography.bodySmall,
+                color = colors.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
             )
         }
     }

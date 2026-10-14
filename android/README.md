@@ -6,9 +6,16 @@ The app has Russian UI and supports 11 curated currencies: KZT, USD, EUR, JPY,
 KWD, RUB, GBP, CHF, AUD, CAD and CNY. This is the application's supported catalog,
 not the full upstream provider catalog.
 
-Version 0.2.1 uses a monochrome Material 3 palette in both system light and dark
-themes. The selected balance leads the overview; numbered chart segments match
-the category legend, so reports do not depend on distinguishing shades.
+Version 0.3.0 uses a monochrome Material 3 palette in both system light and dark
+themes. The aggregate balance of all accounts leads the overview, valued in KZT
+by default; changing the selected account only changes its transaction list.
+Individual accounts show their original and converted balances; calculation
+details show each contribution and quote dates. Missing quotes never produce a
+misleading complete total. Inter and Inter Display are bundled offline with
+Russian/Kazakh glyphs and the tenge sign; see [font notices](app/src/main/assets/fonts/README.md).
+Category fields open a searchable bottom sheet with standard/custom groups,
+expandable expense subcategories and creation actions. Numbered chart segments
+match the category legend, so reports do not depend on distinguishing shades.
 
 ## Run locally
 

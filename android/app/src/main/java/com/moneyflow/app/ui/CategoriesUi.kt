@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -24,13 +23,11 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +50,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.moneyflow.app.data.domain.Category
 import com.moneyflow.app.data.domain.MoneyTransaction
@@ -63,7 +61,6 @@ internal fun categoryPath(categoryId: String?, categories: List<Category>): Stri
     return if (parent == null) category.name else "${parent.name} › ${category.name}"
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun CategorySelector(
     categories: List<Category>,
@@ -76,45 +73,36 @@ internal fun CategorySelector(
     tagPrefix: String = "transaction_category",
     rootsOnly: Boolean = false,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    val roots = categories.filter { it.kind == kind && it.parentId == null }
-    val ordered = roots.flatMap { root ->
-        listOf(root) + if (rootsOnly) emptyList() else categories.filter { it.parentId == root.id }
-    }
+    // Transient picker state belongs to this field, never to a saved transaction or session.
+    var expanded by remember(kind, tagPrefix, rootsOnly) { mutableStateOf(false) }
+    LaunchedEffect(enabled) { if (!enabled) expanded = false }
     Box(Modifier.fillMaxWidth()) {
         OutlinedButton(
             onClick = { expanded = true }, enabled = enabled,
-            modifier = Modifier.fillMaxWidth().testTag(tagPrefix), shape = RoundedCornerShape(16.dp),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().testTag(tagPrefix), shape = RoundedCornerShape(20.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
         ) {
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(label, style = MaterialTheme.typography.labelSmall)
-                Text(categoryPath(selectedId, categories), style = MaterialTheme.typography.bodyMedium)
+            Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.padding(end = 12.dp)) {
+                Icon(NavigationIcons.Categories, contentDescription = null, modifier = Modifier.padding(11.dp).size(20.dp))
             }
-            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Выбрать категорию")
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
-            modifier = Modifier.heightIn(max = 340.dp).semantics { testTagsAsResourceId = true }) {
-            DropdownMenuItem(
-                text = { Text(if (rootsOnly) "Выберите категорию" else "Без категории") },
-                onClick = { expanded = false; onSelect(null) }, modifier = Modifier.testTag("${tagPrefix}_none"),
-            )
-            if (onCreate != null) {
-                DropdownMenuItem(
-                    text = { Text("+ Создать свою категорию") },
-                    onClick = { expanded = false; onCreate() }, modifier = Modifier.testTag("${tagPrefix}_create"),
-                )
-                HorizontalDivider()
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (rootsOnly && selectedId == null) "Выберите категорию" else categoryPath(selectedId, categories),
+                    style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Start, modifier = Modifier.fillMaxWidth())
             }
-            ordered.forEach { category ->
-                DropdownMenuItem(
-                    text = { Text(categoryPath(category.id, categories)) },
-                    onClick = { expanded = false; onSelect(category.id) },
-                    modifier = Modifier.testTag("${tagPrefix}_${category.id}"),
-                )
-            }
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, modifier = Modifier.padding(start = 8.dp))
         }
     }
+    if (expanded && enabled) CategoryPickerSheet(
+        categories = categories, kind = kind, selectedId = selectedId, rootsOnly = rootsOnly,
+        label = label, tagPrefix = tagPrefix, onDismiss = { expanded = false },
+        onSelect = { expanded = false; onSelect(it) },
+        onCreate = onCreate?.let { create -> { expanded = false; create() } },
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
