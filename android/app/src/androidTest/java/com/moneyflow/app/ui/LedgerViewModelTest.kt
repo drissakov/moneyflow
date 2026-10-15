@@ -145,4 +145,65 @@ class LedgerViewModelTest {
         }
     }
 
+    @Test fun versionConflictRemainsVisibleAfterSuccessfulHistoryReloadAndReleasesPendingKey() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = object : ContextWrapper(instrumentation.targetContext) {
+            override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
+                super.getSharedPreferences("ledger_viewmodel_409_test_$name", mode)
+        }
+        val db = Room.inMemoryDatabaseBuilder(context, MoneyFlowDatabase::class.java).build()
+        val store = SessionStore(context)
+        val user = "a6666666-6666-4666-8666-666666666666"
+        val account = "b6666666-6666-4666-8666-666666666666"
+        val tx = "c6666666-6666-4666-8666-666666666666"
+        store.clearPending(user)
+        store.writeSession(Session("conflict-test", Instant.now().plusSeconds(3600).toString(), User(user, "conflict@example.com")))
+        var saved: PendingLedgerMutation? = null
+        val recovery = object : LedgerRecoveryStorage {
+            override fun read(userId: String): PendingLedgerMutation? = saved?.takeIf { it.userId == userId }
+            override fun write(action: PendingLedgerMutation) { saved = action }
+            override fun clear(userId: String, expectedKey: String) { if (saved?.userId == userId && saved?.key == expectedKey) saved = null }
+        }
+        val histories = AtomicInteger()
+        val deletes = AtomicInteger()
+        val models = ViewModelStore()
+        MockWebServer().use { server ->
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse {
+                    if (request.method == "DELETE") {
+                        deletes.incrementAndGet()
+                        return MockResponse().setResponseCode(409).setHeader("Content-Type", "application/json")
+                            .setBody("""{"error":{"code":"version_conflict","message":"Refresh before saving"}}""")
+                    }
+                    val body = when (request.requestUrl?.encodedPath) {
+                        "/api/v1/accounts" -> """{"accounts":[{"id":"$account","name":"Cash","currency":"KZT","opening_balance_minor":"0","balance_minor":"0","created_at":"2026-01-01T00:00:00Z"}]}"""
+                        "/api/v1/categories" -> """{"categories":[]}"""
+                        "/api/v1/transactions" -> { histories.incrementAndGet(); """{"transactions":[],"next_cursor":null}""" }
+                        else -> return MockResponse().setResponseCode(404)
+                    }
+                    return MockResponse().setHeader("Content-Type", "application/json").setBody(body)
+                }
+            }
+            server.start()
+            try {
+                val repository = MoneyFlowRepository(db, store, ledgerRecovery = recovery) { ApiFactory.create(server.url("/").toString()) { null } }
+                lateinit var viewModel: LedgerViewModel
+                instrumentation.runOnMainSync { viewModel = ViewModelProvider(models, LedgerViewModel.Factory(context, repository))[LedgerViewModel::class.java] }
+                withTimeout(10_000) { while (viewModel.state.value.accounts.isEmpty() || !viewModel.state.value.canWrite || viewModel.state.value.loading) delay(10) }
+                val before = histories.get()
+                val original = MoneyTransaction(tx, account, "expense", 100, "KZT", "Coffee", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")
+                instrumentation.runOnMainSync { viewModel.deleteTransaction(original) }
+                withTimeout(10_000) { while (deletes.get() != 1 || histories.get() <= before || viewModel.state.value.busy || viewModel.state.value.loading) delay(10) }
+                assertTrue(viewModel.state.value.error?.contains("Данные изменились") == true)
+                assertFalse(viewModel.state.value.offline)
+                assertEquals(0L, viewModel.state.value.revision) // No mutation success / no silent form close.
+                assertNull(saved); assertNull(repository.ledgerPending.value); assertNull(viewModel.state.value.pending)
+                assertEquals(user, repository.session.value?.user?.id)
+            } finally {
+                instrumentation.runOnMainSync { models.clear() }
+                store.clearSession(); db.close()
+            }
+        }
+    }
+
 }

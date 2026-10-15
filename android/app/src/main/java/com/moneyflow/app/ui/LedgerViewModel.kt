@@ -271,12 +271,14 @@ class LedgerViewModel(private val repository: MoneyFlowRepository) : ViewModel()
             catch (error: Exception) {
                 if (current(session)) {
                     if (expireIfUnauthorized(error, session)) return@launch
-                    _state.update { it.copy(error = message(error)) }
                     if (error is HttpException && error.code() == 409) {
                         launch { runCatching { repository.refreshAccounts() } }
                         launch { runCatching { repository.refreshCategories() } }
                         loadPage(false)
                     }
+                    // Starting the reload clears earlier loading errors. Publish the mutation
+                    // failure afterwards so a successful page cannot hide a rejected save.
+                    _state.update { it.copy(error = message(error)) }
                 }
             } finally { if (current(session)) _state.update { it.copy(busy = false) } }
         }
