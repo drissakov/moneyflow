@@ -25,6 +25,15 @@ func (a *API) createCategory(c *gin.Context) {
 	if !decode(c, &req) {
 		return
 	}
+	if values := c.Request.Header.Values("Idempotency-Key"); len(values) > 0 {
+		key, ok := mutationKey(c)
+		if !ok {
+			return
+		}
+		body, err := a.service.CreateCategoryIdempotent(c.Request.Context(), currentUser(c).ID, key, req.Kind, req.Name, req.ParentID)
+		a.mutationResult(c, body, err, 201)
+		return
+	}
 	view, err := a.service.CreateCategory(c.Request.Context(), currentUser(c).ID, req.Kind, req.Name, req.ParentID)
 	if err != nil {
 		a.respondError(c, err)

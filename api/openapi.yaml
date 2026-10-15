@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: MoneyFlow API
-  version: 0.2.0
+  version: 0.4.0
   description: |
     Android MVP API. PostgreSQL is the authoritative store. All authenticated
     reads and writes are scoped to the authenticated user; a client cannot send
@@ -36,6 +36,7 @@ tags:
   - name: Authentication
   - name: Accounts
   - name: Transactions
+  - name: Transfers
   - name: Categories
   - name: Analytics
   - name: Statement imports
@@ -196,6 +197,12 @@ paths:
       tags: [Accounts]
       operationId: createAccount
       summary: Create an account
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: {type: string, format: uuid}
+          description: Recommended. Retain one key and exact body until acknowledged; identical retries return the saved entity.
       requestBody:
         required: true
         content:
@@ -227,38 +234,76 @@ paths:
           $ref: '#/components/responses/RequestTimeout'
   /api/v1/transactions:
     get:
-      tags: [Transactions]
+      tags:
+      - Transactions
       operationId: listTransactions
-      summary: List the most recent transactions for an owned account
+      summary: Search all owned account history using stable keyset pagination
       parameters:
-        - name: account_id
-          in: query
-          required: true
-          schema:
-            type: string
-            format: uuid
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 50
+      - name: account_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: category_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      - name: kind
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - expense
+          - income
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 100
+      - name: from
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: to
+        in: query
+        required: false
+        schema:
+          type: string
+          format: date-time
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          maxLength: 2048
+      - name: include_deleted
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
       responses:
         '200':
-          description: Transactions for this account; an empty list is valid.
+          description: History page; next_cursor null means complete.
           content:
             application/json:
               schema:
-                type: object
-                required: [transactions]
-                additionalProperties: false
-                properties:
-                  transactions:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Transaction'
+                $ref: '#/components/schemas/TransactionPage'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -269,6 +314,10 @@ paths:
           $ref: '#/components/responses/InternalError'
         '504':
           $ref: '#/components/responses/RequestTimeout'
+      description: Includes archived account/category history. Active rows are returned by default. include_deleted=true
+        also returns soft-deleted rows for restoration. from is inclusive, to exclusive. Root category filters include
+        its children. q is literal case-insensitive text across note, account, effective category name and minor amount.
+        A cursor is valid only for the same filters. Deleted rows never affect balances or analytics.
     post:
       tags: [Transactions]
       operationId: createTransaction
@@ -360,6 +409,12 @@ paths:
         expense root. Income categories have no parent. Names are trimmed and
         must be unique within the same kind and parent for this user, including
         visible standard categories. Custom categories are private to their owner.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: {type: string, format: uuid}
+          description: Recommended. Retain one key and exact body until acknowledged; identical retries return the saved entity.
       requestBody:
         required: true
         content:
@@ -817,6 +872,542 @@ paths:
           $ref: '#/components/responses/StatementImportConflict'
         '504':
           $ref: '#/components/responses/RequestTimeout'
+  /api/v1/accounts/{id}:
+    put:
+      tags:
+      - Accounts
+      operationId: updateAccount
+      summary: Manage an owned account
+      description: 'Currency and ownership are immutable. Archive blocks new/edited/restored operations; history and
+        analytics remain. include_in_balance independently controls portfolio inclusion. Opening balance corrections
+        are checked against signed64bit balance overflow. Updates require expected_version; stale versions return409.
+        Retain one Idempotency-Key and exact JSON until acknowledged. Idempotent replay can describe historical state:
+        refetch after success to display current state.'
+      parameters:
+      - &id001
+        name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - &id002
+        name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccount'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/transactions/{id}:
+    put:
+      tags:
+      - Transactions
+      operationId: updateTransaction
+      summary: Edit an independent transaction
+      description: 'Imported transactions keep their original account and source provenance. Original PDF duplicate
+        detection remains valid after editing or trashing. Transfer legs must be changed through their transfer. Updates
+        require expected_version; stale versions return409. Retain one Idempotency-Key and exact JSON until acknowledged.
+        Idempotent replay can describe historical state: refetch after success to display current state.'
+      parameters:
+      - *id001
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTransaction'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+      - Transactions
+      operationId: deleteTransaction
+      summary: Soft-delete an independent transaction
+      description: ' Updates require expected_version; stale versions return409. Retain one Idempotency-Key and exact
+        JSON until acknowledged. Idempotent replay can describe historical state: refetch after success to display
+        current state.'
+      parameters:
+      - *id001
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/transactions/{id}/restore:
+    post:
+      tags:
+      - Transactions
+      operationId: restoreTransaction
+      summary: Restore a soft-deleted independent transaction
+      description: 'Original category may be archived. An undone statement import permanently removes its rows, which
+        cannot be restored here. Updates require expected_version; stale versions return409. Retain one Idempotency-Key
+        and exact JSON until acknowledged. Idempotent replay can describe historical state: refetch after success
+        to display current state.'
+      parameters:
+      - *id001
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transaction'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/categories/{id}:
+    put:
+      tags:
+      - Categories
+      operationId: updateCategory
+      summary: Manage category display, order and archive state
+      description: 'Default edits are per-user overrides and never affect other users. Kind and parent are immutable.
+        Archiving a root also archives its visible children; unarchive children explicitly after their parent. Updates
+        require expected_version; stale versions return409. Retain one Idempotency-Key and exact JSON until acknowledged.
+        Idempotent replay can describe historical state: refetch after success to display current state.'
+      parameters:
+      - *id001
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCategory'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Category'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/categories/{id}/merge:
+    post:
+      tags:
+      - Categories
+      operationId: mergeCategory
+      summary: Merge a category subtree into another category
+      description: 'Target must be active, same kind, outside the source subtree. Reassigns only this user transactions,
+        including deleted history; archives source plus children. Returns all effective categories. Updates require
+        expected_version; stale versions return409. Retain one Idempotency-Key and exact JSON until acknowledged.
+        Idempotent replay can describe historical state: refetch after success to display current state.'
+      parameters:
+      - *id001
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergeCategory'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - categories
+                properties:
+                  categories:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Category'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/transfers:
+    post:
+      tags:
+      - Transfers
+      operationId: createTransfer
+      summary: Create an atomic transfer and optional fee
+      description: 'Two principal legs are excluded from analytics; the optional third leg is an ordinary expense
+        in the fee account currency. All accounts must be owned and active. No expected_version on create. Updates
+        require expected_version; stale versions return409. Retain one Idempotency-Key and exact JSON until acknowledged.
+        Idempotent replay can describe historical state: refetch after success to display current state.'
+      parameters:
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransfer'
+      responses:
+        '201':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags:
+      - Transfers
+      operationId: listTransfers
+      summary: List active transfer groups
+      parameters:
+      - name: cursor
+        in: query
+        schema:
+          type: string
+          maxLength: 1024
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 50
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferPage'
+  /api/v1/transfers/{id}:
+    get:
+      tags:
+      - Transfers
+      operationId: getTransfer
+      summary: Read an owned transfer group, including deleted legs
+      parameters:
+      - *id001
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags:
+      - Transfers
+      operationId: updateTransfer
+      summary: Edit all transfer legs atomically
+      description: ' Updates require expected_version; stale versions return409. Retain one Idempotency-Key and exact
+        JSON until acknowledged. Idempotent replay can describe historical state: refetch after success to display
+        current state.'
+      parameters:
+      - *id001
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTransfer'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+      - Transfers
+      operationId: deleteTransfer
+      summary: Soft-delete a whole transfer atomically
+      description: ' Updates require expected_version; stale versions return409. Retain one Idempotency-Key and exact
+        JSON until acknowledged. Idempotent replay can describe historical state: refetch after success to display
+        current state.'
+      parameters:
+      - *id001
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1/transfers/{id}/restore:
+    post:
+      tags:
+      - Transfers
+      operationId: restoreTransfer
+      summary: Restore all transfer legs atomically
+      description: ' Updates require expected_version; stale versions return409. Retain one Idempotency-Key and exact
+        JSON until acknowledged. Idempotent replay can describe historical state: refetch after success to display
+        current state.'
+      parameters:
+      - *id001
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExpectedVersion'
+      responses:
+        '200':
+          description: The entity after this command, or the byte-identical durable result of the same key and request.
+            A replay never mutates current state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Transfer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
+        '409':
+          description: Version conflict, idempotency conflict, archived target, invalid state or balance overflow.
+            No partial write is committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   parameters:
     StatementImportID:
@@ -1197,7 +1788,10 @@ components:
       example: '48701'
     CreateAccount:
       type: object
-      required: [name, currency, opening_balance_minor]
+      required:
+      - name
+      - currency
+      - opening_balance_minor
       additionalProperties: false
       properties:
         name:
@@ -1209,10 +1803,30 @@ components:
           $ref: '#/components/schemas/Currency'
         opening_balance_minor:
           allOf:
-            - $ref: '#/components/schemas/OpeningMinorBalance'
+          - $ref: '#/components/schemas/OpeningMinorBalance'
+        type:
+          type: string
+          enum:
+          - card
+          - cash
+          - savings
+          - credit
+          - other
+          default: card
     Account:
       type: object
-      required: [id, name, currency, opening_balance_minor, balance_minor, created_at]
+      required:
+      - id
+      - name
+      - currency
+      - opening_balance_minor
+      - balance_minor
+      - created_at
+      - type
+      - archived
+      - include_in_balance
+      - sort_order
+      - version
       additionalProperties: false
       properties:
         id:
@@ -1229,6 +1843,25 @@ components:
         created_at:
           type: string
           format: date-time
+        type:
+          type: string
+          enum:
+          - card
+          - cash
+          - savings
+          - credit
+          - other
+        archived:
+          type: boolean
+        include_in_balance:
+          type: boolean
+        sort_order:
+          type: integer
+          format: int32
+        version:
+          type: integer
+          format: int64
+          minimum: 1
     TransactionKind:
       type: string
       enum: [expense, income]
@@ -1253,7 +1886,15 @@ components:
           $ref: '#/components/schemas/NullableCategoryID'
     Category:
       type: object
-      required: [id, kind, name, parent_id, is_default]
+      required:
+      - id
+      - kind
+      - name
+      - parent_id
+      - is_default
+      - archived
+      - sort_order
+      - version
       additionalProperties: false
       properties:
         id:
@@ -1269,6 +1910,15 @@ components:
           $ref: '#/components/schemas/NullableCategoryID'
         is_default:
           type: boolean
+        archived:
+          type: boolean
+        sort_order:
+          type: integer
+          format: int32
+        version:
+          type: integer
+          format: int64
+          minimum: 1
     AnalyticsMinorAmount:
       type: string
       pattern: '^(0|[1-9][0-9]{0,18})$'
@@ -1340,7 +1990,21 @@ components:
           description: RFC3339 timestamp with a timezone, year 0001 through 9999.
     Transaction:
       type: object
-      required: [id, account_id, kind, amount_minor, currency, note, occurred_at, created_at]
+      required:
+      - id
+      - account_id
+      - kind
+      - amount_minor
+      - currency
+      - note
+      - occurred_at
+      - created_at
+      - version
+      - deleted_at
+      - transfer_id
+      - transfer_role
+      - source
+      - import_id
       additionalProperties: false
       properties:
         id:
@@ -1356,7 +2020,8 @@ components:
         exclude_from_analytics:
           type: boolean
           default: false
-          description: Explicit imported own-account/cash movement. Affects the ledger balance but is omitted from income/expense analytics. Omitted when false.
+          description: Explicit imported own-account/cash movement. Affects the ledger balance but is omitted from income/expense
+            analytics. Omitted when false.
         amount_minor:
           $ref: '#/components/schemas/PositiveMinorAmount'
         currency:
@@ -1369,6 +2034,35 @@ components:
         created_at:
           type: string
           format: date-time
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+        transfer_id:
+          type: string
+          format: uuid
+          nullable: true
+        transfer_role:
+          type: string
+          enum:
+          - from
+          - to
+          - fee
+          nullable: true
+        source:
+          type: string
+          enum:
+          - manual
+          - import
+          - transfer
+        import_id:
+          type: string
+          format: uuid
+          nullable: true
     StatementBank:
       type: string
       enum: [kaspi, halyk]
@@ -1573,3 +2267,295 @@ components:
               type: string
               description: Human-readable explanation.
               example: amount_minor must be a positive integer string
+    ExpectedVersion:
+      type: object
+      additionalProperties: false
+      required:
+      - expected_version
+      properties:
+        expected_version:
+          type: integer
+          format: int64
+          minimum: 1
+    UpdateAccount:
+      type: object
+      additionalProperties: false
+      required:
+      - expected_version
+      - name
+      - type
+      - opening_balance_minor
+      - archived
+      - include_in_balance
+      - sort_order
+      properties:
+        expected_version:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        type:
+          type: string
+          enum:
+          - card
+          - cash
+          - savings
+          - credit
+          - other
+        opening_balance_minor:
+          $ref: '#/components/schemas/OpeningMinorBalance'
+        archived:
+          type: boolean
+        include_in_balance:
+          type: boolean
+        sort_order:
+          type: integer
+          format: int32
+    UpdateCategory:
+      type: object
+      additionalProperties: false
+      required:
+      - expected_version
+      - name
+      - archived
+      - sort_order
+      properties:
+        expected_version:
+          type: integer
+          format: int64
+          minimum: 1
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        archived:
+          type: boolean
+        sort_order:
+          type: integer
+          format: int32
+    MergeCategory:
+      type: object
+      additionalProperties: false
+      required:
+      - expected_version
+      - target_category_id
+      properties:
+        expected_version:
+          type: integer
+          format: int64
+          minimum: 1
+        target_category_id:
+          type: string
+          format: uuid
+    UpdateTransaction:
+      type: object
+      required:
+      - account_id
+      - kind
+      - category_id
+      - amount_minor
+      - note
+      - occurred_at
+      - expected_version
+      - exclude_from_analytics
+      additionalProperties: false
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: '#/components/schemas/TransactionKind'
+        category_id:
+          $ref: '#/components/schemas/NullableCategoryID'
+        amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        note:
+          type: string
+          maxLength: 500
+          default: ''
+          description: At most 500 Unicode characters.
+        occurred_at:
+          type: string
+          format: date-time
+          description: RFC3339 timestamp with a timezone, year 0001 through 9999.
+        expected_version:
+          type: integer
+          format: int64
+          minimum: 1
+        exclude_from_analytics:
+          type: boolean
+          default: false
+    TransactionPage:
+      type: object
+      additionalProperties: false
+      required:
+      - transactions
+      - next_cursor
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+        next_cursor:
+          type: string
+          nullable: true
+    CreateTransfer:
+      type: object
+      additionalProperties: false
+      required:
+      - from_account_id
+      - to_account_id
+      - from_amount_minor
+      - to_amount_minor
+      - occurred_at
+      properties:
+        from_account_id:
+          type: string
+          format: uuid
+        to_account_id:
+          type: string
+          format: uuid
+        from_amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        to_amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        fee_account_id:
+          type: string
+          format: uuid
+          nullable: true
+        fee_amount_minor:
+          $ref: '#/components/schemas/OpeningMinorBalance'
+        note:
+          type: string
+          maxLength: 500
+        occurred_at:
+          type: string
+          format: date-time
+      description: Actual source/destination amounts; no reference FX rate is applied. Same-currency amounts must equal.
+        Optional fee is nonnegative and requires an owned active fee account exactly when positive.
+    UpdateTransfer:
+      type: object
+      additionalProperties: false
+      required:
+      - from_account_id
+      - to_account_id
+      - from_amount_minor
+      - to_amount_minor
+      - occurred_at
+      - expected_version
+      properties:
+        from_account_id:
+          type: string
+          format: uuid
+        to_account_id:
+          type: string
+          format: uuid
+        from_amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        to_amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        fee_account_id:
+          type: string
+          format: uuid
+          nullable: true
+        fee_amount_minor:
+          $ref: '#/components/schemas/OpeningMinorBalance'
+        note:
+          type: string
+          maxLength: 500
+        occurred_at:
+          type: string
+          format: date-time
+        expected_version:
+          type: integer
+          format: int64
+          minimum: 1
+      description: Actual source/destination amounts; no reference FX rate is applied. Same-currency amounts must equal.
+        Optional fee is nonnegative and requires an owned active fee account exactly when positive.
+    Transfer:
+      type: object
+      additionalProperties: false
+      required:
+      - from_account_id
+      - to_account_id
+      - from_amount_minor
+      - to_amount_minor
+      - fee_account_id
+      - fee_amount_minor
+      - note
+      - occurred_at
+      - id
+      - from_currency
+      - to_currency
+      - fee_currency
+      - created_at
+      - version
+      - deleted_at
+      - transactions
+      properties:
+        from_account_id:
+          type: string
+          format: uuid
+        to_account_id:
+          type: string
+          format: uuid
+        from_amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        to_amount_minor:
+          $ref: '#/components/schemas/PositiveMinorAmount'
+        fee_account_id:
+          type: string
+          format: uuid
+          nullable: true
+        fee_amount_minor:
+          $ref: '#/components/schemas/OpeningMinorBalance'
+        note:
+          type: string
+          maxLength: 500
+        occurred_at:
+          type: string
+          format: date-time
+        id:
+          type: string
+          format: uuid
+        from_currency:
+          $ref: '#/components/schemas/Currency'
+        to_currency:
+          $ref: '#/components/schemas/Currency'
+        fee_currency:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+        deleted_at:
+          type: string
+          format: date-time
+          nullable: true
+        transactions:
+          type: array
+          minItems: 2
+          maxItems: 3
+          items:
+            $ref: '#/components/schemas/Transaction'
+    TransferPage:
+      type: object
+      additionalProperties: false
+      required:
+      - transfers
+      - next_cursor
+      properties:
+        transfers:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transfer'
+        next_cursor:
+          type: string
+          nullable: true

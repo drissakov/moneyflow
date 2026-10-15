@@ -24,49 +24,64 @@ type AccountView struct {
 	OpeningBalanceMinor string    `json:"opening_balance_minor"`
 	BalanceMinor        string    `json:"balance_minor"`
 	CreatedAt           time.Time `json:"created_at"`
+	Type                string    `json:"type"`
+	Archived            bool      `json:"archived"`
+	IncludeInBalance    bool      `json:"include_in_balance"`
+	SortOrder           int       `json:"sort_order"`
+	Version             int64     `json:"version"`
 }
 
 type TransactionView struct {
-	ID                   string    `json:"id"`
-	AccountID            string    `json:"account_id"`
-	Kind                 string    `json:"kind"`
-	AmountMinor          string    `json:"amount_minor"`
-	Currency             string    `json:"currency"`
-	Note                 string    `json:"note"`
-	OccurredAt           time.Time `json:"occurred_at"`
-	CreatedAt            time.Time `json:"created_at"`
-	CategoryID           *string   `json:"category_id"`
-	ExcludeFromAnalytics bool      `json:"exclude_from_analytics,omitempty"`
+	ID                   string     `json:"id"`
+	AccountID            string     `json:"account_id"`
+	Kind                 string     `json:"kind"`
+	AmountMinor          string     `json:"amount_minor"`
+	Currency             string     `json:"currency"`
+	Note                 string     `json:"note"`
+	OccurredAt           time.Time  `json:"occurred_at"`
+	CreatedAt            time.Time  `json:"created_at"`
+	CategoryID           *string    `json:"category_id"`
+	ExcludeFromAnalytics bool       `json:"exclude_from_analytics,omitempty"`
+	Version              int64      `json:"version"`
+	DeletedAt            *time.Time `json:"deleted_at"`
+	TransferID           *string    `json:"transfer_id"`
+	TransferRole         *string    `json:"transfer_role"`
+	Source               string     `json:"source"`
+	ImportID             *string    `json:"import_id"`
 }
 
-func (s *Service) CreateAccount(ctx context.Context, userID, name, currency, opening string) (AccountView, error) {
+func (s *Service) CreateAccount(ctx context.Context, userID, name, currency, opening string, kinds ...string) (AccountView, error) {
 	var view AccountView
+	kind := "card"
+	if len(kinds) > 0 && kinds[0] != "" {
+		kind = kinds[0]
+	}
+	if err := validAccountType(kind); err != nil {
+		return view, err
+	}
 	name, value, err := ValidateAccount(name, currency, opening)
 	if err != nil {
 		return view, err
 	}
 	a := model.Account{
 		ID: uuid.NewString(), UserID: userID, Name: name, Currency: currency,
-		OpeningBalanceMinor: value, CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		OpeningBalanceMinor: value, Type: kind, IncludeInBalance: true, Version: 1, CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
 	}
 	if err := s.DB.WithContext(ctx).Create(&a).Error; err != nil {
 		return view, err
 	}
-	return AccountView{
-		ID: a.ID, Name: a.Name, Currency: a.Currency,
-		OpeningBalanceMinor: strconv.FormatInt(value, 10), BalanceMinor: strconv.FormatInt(value, 10), CreatedAt: a.CreatedAt,
-	}, nil
+	return accountView(a, strconv.FormatInt(value, 10)), nil
 }
 
 func (s *Service) Accounts(ctx context.Context, userID string) ([]AccountView, error) {
 	accounts := make([]AccountView, 0)
 	// SUM(bigint) uses PostgreSQL numeric, so an intermediate sum cannot overflow.
-	err := s.DB.WithContext(ctx).Raw(`SELECT a.id, a.name, a.currency, a.created_at,
+	err := s.DB.WithContext(ctx).Raw(`SELECT a.id, a.name, a.currency, a.created_at, a.type,a.archived,a.include_in_balance,a.sort_order,a.version,
 		a.opening_balance_minor::text AS opening_balance_minor,
 		(a.opening_balance_minor::numeric + COALESCE(SUM(CASE
 			WHEN t.kind = 'income' THEN t.amount_minor ELSE -t.amount_minor END), 0))::text AS balance_minor
-		FROM accounts a LEFT JOIN transactions t ON t.account_id = a.id AND t.user_id = a.user_id
-		WHERE a.user_id = ? GROUP BY a.id ORDER BY a.created_at, a.id`, userID).Scan(&accounts).Error
+		FROM accounts a LEFT JOIN transactions t ON t.account_id = a.id AND t.user_id = a.user_id AND t.deleted_at IS NULL
+		WHERE a.user_id = ? GROUP BY a.id ORDER BY a.sort_order, a.created_at, a.id`, userID).Scan(&accounts).Error
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +96,7 @@ func (s *Service) Accounts(ctx context.Context, userID string) ([]AccountView, e
 func transactionView(t model.Transaction) TransactionView {
 	return TransactionView{
 		ID: t.ID, AccountID: t.AccountID, Kind: t.Kind, AmountMinor: strconv.FormatInt(t.AmountMinor, 10),
-		Currency: t.Currency, Note: t.Note, OccurredAt: t.OccurredAt, CreatedAt: t.CreatedAt, CategoryID: t.CategoryID, ExcludeFromAnalytics: t.ExcludeFromAnalytics,
+		Currency: t.Currency, Note: t.Note, OccurredAt: t.OccurredAt, CreatedAt: t.CreatedAt, CategoryID: t.CategoryID, ExcludeFromAnalytics: t.ExcludeFromAnalytics, Version: t.Version, DeletedAt: t.DeletedAt, TransferID: t.TransferID, TransferRole: t.TransferRole, Source: "manual",
 	}
 }
 
@@ -108,6 +123,9 @@ func (s *Service) CreateTransaction(ctx context.Context, userID, key string, inp
 	lockHash := sha256.Sum256([]byte(userID + ":" + key))
 	lockID := int64(binary.BigEndian.Uint64(lockHash[:8]))
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockLedger(tx, userID); err != nil {
+			return err
+		}
 		// Serialize matching retries before inspecting the durable response. A hash
 		// collision only serializes unrelated operations; keys remain exact in storage.
 		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", lockID).Error; err != nil {
@@ -135,13 +153,16 @@ func (s *Service) CreateTransaction(ctx context.Context, userID, key string, inp
 		if err != nil {
 			return err
 		}
+		if a.Archived {
+			return &Error{409, "archived_account", "Unarchive the account before adding operations."}
+		}
 		if err := validateCategoryAssignment(tx, userID, input.Kind, input.CategoryID); err != nil {
 			return err
 		}
 		var balanceText string
 		err = tx.Raw(`SELECT (?::numeric + COALESCE(SUM(CASE
 			WHEN kind = 'income' THEN amount_minor ELSE -amount_minor END), 0))::text
-			FROM transactions WHERE account_id = ? AND user_id = ?`, a.OpeningBalanceMinor, a.ID, userID).Scan(&balanceText).Error
+			FROM transactions WHERE account_id = ? AND user_id = ? AND deleted_at IS NULL`, a.OpeningBalanceMinor, a.ID, userID).Scan(&balanceText).Error
 		if err != nil {
 			return err
 		}
@@ -181,7 +202,7 @@ func (s *Service) Transactions(ctx context.Context, userID, accountID string, li
 		return nil, err
 	}
 	records := make([]model.Transaction, 0)
-	err = s.DB.WithContext(ctx).Where("account_id = ? AND user_id = ?", accountID, userID).
+	err = s.DB.WithContext(ctx).Where("account_id = ? AND user_id = ? AND deleted_at IS NULL", accountID, userID).
 		Order("occurred_at DESC, created_at DESC, id DESC").Limit(limit).Find(&records).Error
 	if err != nil {
 		return nil, err
@@ -190,5 +211,12 @@ func (s *Service) Transactions(ctx context.Context, userID, accountID string, li
 	for _, record := range records {
 		views = append(views, transactionView(record))
 	}
+	if err := populateTransactionSources(s.DB.WithContext(ctx), views); err != nil {
+		return nil, err
+	}
 	return views, nil
+}
+
+func accountView(a model.Account, balance string) AccountView {
+	return AccountView{ID: a.ID, Name: a.Name, Currency: a.Currency, OpeningBalanceMinor: strconv.FormatInt(a.OpeningBalanceMinor, 10), BalanceMinor: balance, CreatedAt: a.CreatedAt, Type: a.Type, Archived: a.Archived, IncludeInBalance: a.IncludeInBalance, SortOrder: a.SortOrder, Version: a.Version}
 }

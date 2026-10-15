@@ -80,7 +80,7 @@ func importAccount(tx *gorm.DB, userID, accountID string) (model.Account, error)
 func importBalance(tx *gorm.DB, account model.Account) (int64, error) {
 	var text string
 	err := tx.Raw(`SELECT (?::numeric + COALESCE(SUM(CASE WHEN kind='income' THEN amount_minor ELSE -amount_minor END),0))::text
-		FROM transactions WHERE account_id = ? AND user_id = ?`, account.OpeningBalanceMinor, account.ID, account.UserID).Scan(&text).Error
+		FROM transactions WHERE account_id = ? AND user_id = ? AND deleted_at IS NULL`, account.OpeningBalanceMinor, account.ID, account.UserID).Scan(&text).Error
 	if err != nil {
 		return 0, err
 	}
@@ -100,9 +100,15 @@ func (s *Service) PreviewImport(ctx context.Context, userID string, input Import
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	draft.ID, draft.UserID, draft.Status, draft.CreatedAt, draft.ExpiresAt = uuid.NewString(), userID, "draft", now, now.Add(importDraftTTL)
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockLedger(tx, userID); err != nil {
+			return err
+		}
 		account, err := importAccount(tx, userID, draft.AccountID)
 		if err != nil {
 			return err
+		}
+		if account.Archived {
+			return &Error{409, "archived_account", "Unarchive the account before importing."}
 		}
 		if account.Currency != draft.Currency {
 			return Invalid("Statement currency must match the selected account currency.")
@@ -212,6 +218,9 @@ func (s *Service) CommitImport(ctx context.Context, userID, id, key string, inpu
 	}
 	var response []byte
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockLedger(tx, userID); err != nil {
+			return err
+		}
 		if err := lockImportKey(tx, userID, key); err != nil {
 			return err
 		}
@@ -238,6 +247,9 @@ func (s *Service) CommitImport(ctx context.Context, userID, id, key string, inpu
 		account, err := importAccount(tx, userID, draft.AccountID)
 		if err != nil {
 			return err
+		}
+		if account.Archived {
+			return &Error{409, "archived_account", "Unarchive the account before importing."}
 		}
 		if account.Currency != draft.Currency {
 			return Invalid("Statement currency must match the selected account currency.")
@@ -388,6 +400,9 @@ func (s *Service) UndoImport(ctx context.Context, userID, id, key string) ([]byt
 	}
 	var response []byte
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockLedger(tx, userID); err != nil {
+			return err
+		}
 		if err := lockImportKey(tx, userID, key); err != nil {
 			return err
 		}
@@ -426,7 +441,7 @@ func (s *Service) UndoImport(ctx context.Context, userID, id, key string) ([]byt
 		}
 		var transactions []model.Transaction
 		if len(ids) > 0 {
-			if err := tx.Where("id IN ? AND user_id = ? AND account_id = ?", ids, userID, account.ID).Find(&transactions).Error; err != nil {
+			if err := tx.Where("id IN ? AND user_id = ? AND account_id = ?", ids, userID, account.ID).Where("deleted_at IS NULL").Find(&transactions).Error; err != nil {
 				return err
 			}
 		}

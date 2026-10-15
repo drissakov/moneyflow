@@ -182,6 +182,9 @@ func (s *Service) Portfolio(ctx context.Context, userID, base string) (Portfolio
 	}
 	foreign := false
 	for _, account := range accounts {
+		if !account.IncludeInBalance {
+			continue
+		}
 		if account.Currency != view.BaseCurrency {
 			foreign = true
 			break
@@ -200,6 +203,9 @@ func (s *Service) Portfolio(ctx context.Context, userID, base string) (Portfolio
 	total := new(big.Int)
 	target, _ := fx.Lookup(view.BaseCurrency)
 	for _, account := range accounts {
+		if !account.IncludeInBalance {
+			continue
+		}
 		item := PortfolioAccountView{ID: account.ID, Name: account.Name, Currency: account.Currency, BalanceMinor: account.BalanceMinor}
 		rate, date, ok := s.fxCache.Pair(snapshot, account.Currency, view.BaseCurrency)
 		if !ok {

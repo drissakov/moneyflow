@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"strings"
 	"time"
@@ -13,7 +11,6 @@ import (
 	"github.com/drissakov/moneyflow/backend/internal/model"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type CategoryView struct {
@@ -22,12 +19,14 @@ type CategoryView struct {
 	Name      string  `json:"name"`
 	ParentID  *string `json:"parent_id"`
 	IsDefault bool    `json:"is_default"`
+	Archived  bool    `json:"archived"`
+	SortOrder int     `json:"sort_order"`
+	Version   int64   `json:"version"`
 }
 
 func categoryView(c model.Category) CategoryView {
-	return CategoryView{ID: c.ID, Kind: c.Kind, Name: c.Name, ParentID: c.ParentID, IsDefault: c.IsDefault}
+	return CategoryView{c.ID, c.Kind, c.Name, c.ParentID, c.IsDefault, c.Archived, c.SortOrder, c.Version}
 }
-
 func ParseOptionalID(raw *string) (*string, error) {
 	if raw == nil {
 		return nil, nil
@@ -65,10 +64,17 @@ func ValidateCategory(kind, name string, parentID *string) (string, *string, err
 	return name, parentID, nil
 }
 
-func (s *Service) Categories(ctx context.Context, userID string) ([]CategoryView, error) {
+func visibleCategories(tx *gorm.DB, userID string) ([]model.Category, error) {
 	records := make([]model.Category, 0)
-	err := s.DB.WithContext(ctx).Where("user_id IS NULL OR user_id = ?", userID).
-		Order("kind, is_default DESC, created_at, id").Find(&records).Error
+	err := tx.Raw(`SELECT c.id,c.user_id,c.kind,COALESCE(o.name,c.name) AS name,c.parent_id,c.is_default,c.created_at,
+ COALESCE(o.archived,c.archived) AS archived,COALESCE(o.sort_order,c.sort_order) AS sort_order,COALESCE(o.version,c.version) AS version
+ FROM categories c LEFT JOIN category_overrides o ON o.category_id=c.id AND o.user_id=?
+ WHERE c.user_id IS NULL OR c.user_id=? ORDER BY c.kind,COALESCE(o.sort_order,c.sort_order),c.created_at,c.id`, userID, userID).Scan(&records).Error
+	return records, err
+}
+
+func (s *Service) Categories(ctx context.Context, userID string) ([]CategoryView, error) {
+	records, err := visibleCategories(s.DB.WithContext(ctx), userID)
 	if err != nil {
 		return nil, err
 	}
@@ -81,57 +87,106 @@ func (s *Service) Categories(ctx context.Context, userID string) ([]CategoryView
 
 func findVisibleCategory(tx *gorm.DB, userID, id string) (model.Category, error) {
 	var c model.Category
-	err := tx.Where("id = ? AND (user_id IS NULL OR user_id = ?)", id, userID).First(&c).Error
+	err := tx.Where("id=? AND (user_id IS NULL OR user_id=?)", id, userID).First(&c).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return c, &Error{404, "category_not_found", "Category was not found."}
 	}
-	return c, err
+	if err != nil {
+		return c, err
+	}
+	if c.IsDefault {
+		var override model.CategoryOverride
+		err := tx.Where("user_id=? AND category_id=?", userID, id).First(&override).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return c, err
+		}
+		if err == nil {
+			c.Name, c.Archived, c.SortOrder, c.Version = override.Name, override.Archived, override.SortOrder, override.Version
+		}
+	}
+	return c, nil
+}
+
+func categoryActive(tx *gorm.DB, userID string, c model.Category) error {
+	if c.Archived {
+		return &Error{409, "archived_category", "Choose an active category or unarchive it first."}
+	}
+	if c.ParentID != nil {
+		parent, err := findVisibleCategory(tx, userID, *c.ParentID)
+		if err != nil {
+			return err
+		}
+		if parent.Archived {
+			return &Error{409, "archived_category", "Unarchive the parent category first."}
+		}
+	}
+	return nil
+}
+
+func validateCategoryName(tx *gorm.DB, userID string, c model.Category) error {
+	records, err := visibleCategories(tx, userID)
+	if err != nil {
+		return err
+	}
+	for _, sibling := range records {
+		if sibling.ID != c.ID && !sibling.Archived && sibling.Kind == c.Kind && categorySortID(sibling.ParentID) == categorySortID(c.ParentID) && strings.EqualFold(sibling.Name, c.Name) {
+			return &Error{409, "category_exists", "A category with this name already exists under this parent."}
+		}
+	}
+	return nil
+}
+
+func createCategoryTx(tx *gorm.DB, userID, kind, name string, parentID *string) (CategoryView, error) {
+	if parentID != nil {
+		parent, err := findVisibleCategory(tx, userID, *parentID)
+		if err != nil {
+			return CategoryView{}, err
+		}
+		if parent.Kind != "expense" || parent.ParentID != nil {
+			return CategoryView{}, Invalid("An expense subcategory must belong to a root expense category.")
+		}
+		if err := categoryActive(tx, userID, parent); err != nil {
+			return CategoryView{}, err
+		}
+	}
+	c := model.Category{ID: uuid.NewString(), UserID: &userID, Kind: kind, Name: name, ParentID: parentID, Version: 1, CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+	if err := validateCategoryName(tx, userID, c); err != nil {
+		return CategoryView{}, err
+	}
+	if err := tx.Create(&c).Error; err != nil {
+		return CategoryView{}, err
+	}
+	return categoryView(c), nil
 }
 
 func (s *Service) CreateCategory(ctx context.Context, userID, kind, name string, parentID *string) (CategoryView, error) {
-	var view CategoryView
 	name, parentID, err := ValidateCategory(kind, name, parentID)
 	if err != nil {
-		return view, err
+		return CategoryView{}, err
 	}
-	lockHash := sha256.Sum256([]byte("categories:" + userID))
+	var view CategoryView
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Serialize a user's category creation so duplicate checks include other
-		// concurrent requests. Shared defaults are immutable.
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", int64(binary.BigEndian.Uint64(lockHash[:8]))).Error; err != nil {
+		if err := lockLedger(tx, userID); err != nil {
 			return err
 		}
-		if parentID != nil {
-			parent, err := findVisibleCategory(tx, userID, *parentID)
-			if err != nil {
-				return err
-			}
-			if parent.Kind != "expense" || parent.ParentID != nil {
-				return Invalid("An expense subcategory must belong to a root expense category.")
-			}
-		}
-		var siblings []model.Category
-		if err := tx.Model(&model.Category{}).
-			Select("name").Where("(user_id IS NULL OR user_id = ?) AND kind = ? AND parent_id IS NOT DISTINCT FROM ?::uuid", userID, kind, parentID).
-			Find(&siblings).Error; err != nil {
-			return err
-		}
-		// PostgreSQL lower() depends on the server's locale: Windows test databases
-		// using the C locale do not fold Cyrillic. EqualFold is Unicode aware.
-		for _, sibling := range siblings {
-			if strings.EqualFold(sibling.Name, name) {
-				return &Error{409, "category_exists", "A category with this name already exists under this parent."}
-			}
-		}
-		c := model.Category{ID: uuid.NewString(), UserID: &userID, Kind: kind, Name: name, ParentID: parentID,
-			CreatedAt: time.Now().UTC().Truncate(time.Microsecond)}
-		if err := tx.Create(&c).Error; err != nil {
-			return err
-		}
-		view = categoryView(c)
-		return nil
+		var err error
+		view, err = createCategoryTx(tx, userID, kind, name, parentID)
+		return err
 	})
 	return view, err
+}
+
+func (s *Service) CreateCategoryIdempotent(ctx context.Context, userID, key, kind, name string, parentID *string) ([]byte, error) {
+	normalized, parent, err := ValidateCategory(kind, name, parentID)
+	if err != nil {
+		return nil, err
+	}
+	body := struct {
+		Kind     string  `json:"kind"`
+		Name     string  `json:"name"`
+		ParentID *string `json:"parent_id"`
+	}{kind, normalized, parent}
+	return s.mutate(ctx, userID, key, "POST /api/v1/categories", body, func(tx *gorm.DB) (any, error) { return createCategoryTx(tx, userID, kind, normalized, parent) })
 }
 
 func validateCategoryAssignment(tx *gorm.DB, userID, kind string, id *string) error {
@@ -145,7 +200,7 @@ func validateCategoryAssignment(tx *gorm.DB, userID, kind string, id *string) er
 	if c.Kind != kind {
 		return Invalid("Category kind must match transaction kind.")
 	}
-	return nil
+	return categoryActive(tx, userID, c)
 }
 
 func (s *Service) SetTransactionCategory(ctx context.Context, userID, transactionID string, categoryID *string) (TransactionView, error) {
@@ -159,23 +214,29 @@ func (s *Service) SetTransactionCategory(ctx context.Context, userID, transactio
 		return view, err
 	}
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var t model.Transaction
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", transactionID, userID).First(&t).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return &Error{404, "transaction_not_found", "Transaction was not found."}
+		if err := lockLedger(tx, userID); err != nil {
+			return err
 		}
+		t, err := lockedTransaction(tx, userID, transactionID)
 		if err != nil {
 			return err
+		}
+		if err := requireIndependentTransaction(t); err != nil {
+			return err
+		}
+		if t.DeletedAt != nil {
+			return &Error{409, "transaction_deleted", "Restore this transaction before editing it."}
 		}
 		if err := validateCategoryAssignment(tx, userID, t.Kind, categoryID); err != nil {
 			return err
 		}
-		if err := tx.Model(&t).Update("category_id", categoryID).Error; err != nil {
+		t.CategoryID = categoryID
+		t.Version++
+		if err := tx.Save(&t).Error; err != nil {
 			return err
 		}
-		t.CategoryID = categoryID
-		view = transactionView(t)
-		return nil
+		view, err = enrichedTransactionView(tx, t)
+		return err
 	})
 	return view, err
 }

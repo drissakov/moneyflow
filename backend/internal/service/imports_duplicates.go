@@ -51,7 +51,7 @@ func importCandidates(tx *gorm.DB, draft model.StatementImport, rows []model.Sta
 	err = tx.Raw(`SELECT (occurred_at AT TIME ZONE ?)::date::text AS local_day, kind, amount_minor,
 		COUNT(*) AS matching_count,
 		encode(sha256(convert_to(string_agg(id::text, ',' ORDER BY id), 'UTF8')), 'hex') AS candidate_hash
-		FROM transactions WHERE user_id = ? AND account_id = ? AND occurred_at >= ? AND occurred_at < ?
+		FROM transactions WHERE deleted_at IS NULL AND user_id = ? AND account_id = ? AND occurred_at >= ? AND occurred_at < ?
 		GROUP BY (occurred_at AT TIME ZONE ?)::date, kind, amount_minor`,
 		draft.Timezone, draft.UserID, draft.AccountID, start.UTC(), end.UTC(), draft.Timezone).Scan(&groups).Error
 	if err != nil {

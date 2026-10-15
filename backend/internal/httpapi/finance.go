@@ -19,11 +19,21 @@ func (a *API) createAccount(c *gin.Context) {
 		Name                string `json:"name"`
 		Currency            string `json:"currency"`
 		OpeningBalanceMinor string `json:"opening_balance_minor"`
+		Type                string `json:"type"`
 	}
 	if !decode(c, &req) {
 		return
 	}
-	view, err := a.service.CreateAccount(c.Request.Context(), currentUser(c).ID, req.Name, req.Currency, req.OpeningBalanceMinor)
+	if values := c.Request.Header.Values("Idempotency-Key"); len(values) > 0 {
+		key, ok := mutationKey(c)
+		if !ok {
+			return
+		}
+		body, err := a.service.CreateAccountIdempotent(c.Request.Context(), currentUser(c).ID, key, req.Name, req.Currency, req.OpeningBalanceMinor, req.Type)
+		a.mutationResult(c, body, err, 201)
+		return
+	}
+	view, err := a.service.CreateAccount(c.Request.Context(), currentUser(c).ID, req.Name, req.Currency, req.OpeningBalanceMinor, req.Type)
 	if err != nil {
 		a.respondError(c, err)
 		return

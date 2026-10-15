@@ -142,6 +142,26 @@ func TestIntegrationMulticurrencyMigrationPreservesExistingLedger(t *testing.T) 
 	if err := db.Raw("SELECT count(*) FROM statement_imports").Scan(&importCount).Error; err != nil || importCount != 0 {
 		t.Fatal("import migration did not create empty metadata safely")
 	}
+	var p0 struct {
+		Type             string
+		Archived         bool
+		IncludeInBalance bool
+		Version          int64
+	}
+	if err := db.Raw("SELECT type,archived,include_in_balance,version FROM accounts WHERE id=?", account).Scan(&p0).Error; err != nil || p0.Type != "card" || p0.Archived || !p0.IncludeInBalance || p0.Version != 1 {
+		t.Fatal("P0 migration changed old account defaults")
+	}
+	var txVersion int64
+	if err := db.Raw("SELECT version FROM transactions WHERE id=? AND deleted_at IS NULL AND transfer_id IS NULL", transaction).Scan(&txVersion).Error; err != nil || txVersion != 1 {
+		t.Fatal("P0 migration changed legacy transaction state")
+	}
+	var overrideCount, transferCount int64
+	if err := db.Raw("SELECT count(*) FROM category_overrides").Scan(&overrideCount).Error; err != nil || overrideCount != 0 {
+		t.Fatal("P0 invented category overrides")
+	}
+	if err := db.Raw("SELECT count(*) FROM transfers").Scan(&transferCount).Error; err != nil || transferCount != 0 {
+		t.Fatal("P0 invented transfers")
+	}
 	for _, currency := range []string{"RUB", "GBP", "CHF", "AUD", "CAD", "CNY"} {
 		newAccount := uuid.NewString()
 		if err := db.Exec("INSERT INTO accounts(id,user_id,name,currency,opening_balance_minor,created_at) VALUES(?,?,'New currency',?,0,now())", newAccount, user, currency).Error; err != nil {

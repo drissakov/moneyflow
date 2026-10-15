@@ -156,13 +156,15 @@ func (s *Service) Analytics(ctx context.Context, userID, month, currency, timezo
 	// PostgreSQL aggregates every matching entry and SUM(bigint) is numeric.
 	// Parsing the grouped values and totals below provides explicit overflow errors.
 	err = s.DB.WithContext(ctx).Raw(`SELECT t.kind, t.category_id,
-		COALESCE(c.name, 'Без категории') AS name, c.parent_id,
-		COALESCE(p.name, '') AS parent_name, SUM(t.amount_minor)::text AS amount_minor
+		COALESCE(co.name,c.name, 'Без категории') AS name, c.parent_id,
+		COALESCE(po.name,p.name, '') AS parent_name, SUM(t.amount_minor)::text AS amount_minor
 		FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
 		LEFT JOIN categories p ON p.id = c.parent_id
+ LEFT JOIN category_overrides co ON co.category_id=c.id AND co.user_id=t.user_id
+ LEFT JOIN category_overrides po ON po.category_id=p.id AND po.user_id=t.user_id
 		WHERE t.user_id = ? AND t.currency = ? AND t.occurred_at >= ? AND t.occurred_at < ?
-		AND NOT t.exclude_from_analytics
-		GROUP BY t.kind, t.category_id, c.name, c.parent_id, p.name`, userID, currency, start, end).Scan(&rows).Error
+		AND t.deleted_at IS NULL AND NOT t.exclude_from_analytics
+		GROUP BY t.kind, t.category_id, c.name, co.name, c.parent_id, p.name, po.name`, userID, currency, start, end).Scan(&rows).Error
 	if err != nil {
 		return AnalyticsView{}, err
 	}
