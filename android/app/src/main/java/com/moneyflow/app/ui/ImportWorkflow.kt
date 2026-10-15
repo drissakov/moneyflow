@@ -11,6 +11,7 @@ data class ImportRowChoice(
     val allowPossibleDuplicate: Boolean = false,
     val excludeFromAnalytics: Boolean = false,
     val transferReviewed: Boolean = false,
+    val categoryEdited: Boolean = false,
 )
 
 /** Makes the exact submitted confirmation immutable until its outcome is known. */

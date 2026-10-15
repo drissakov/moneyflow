@@ -72,7 +72,10 @@ func validateImportPreview(input ImportPreviewInput) (model.StatementImport, []m
 	if !fileHashPattern.MatchString(input.FileSHA256) {
 		return draft, nil, nil, Invalid("File_sha256 must be 64 lowercase hexadecimal characters.")
 	}
-	if input.Timezone == "" || input.Timezone == "Local" || len(input.Timezone) > 100 || !utf8.ValidString(input.Timezone) {
+	if input.Timezone == "" {
+		input.Timezone = "Etc/GMT-5"
+	}
+	if input.Timezone == "Local" || len(input.Timezone) > 100 || !utf8.ValidString(input.Timezone) {
 		return draft, nil, nil, Invalid("Timezone must be a valid IANA identifier.")
 	}
 	location, err := time.LoadLocation(input.Timezone)

@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.moneyflow.app.data.domain.Money
@@ -42,6 +43,11 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
     var undoConfirmation by remember { mutableStateOf<ImportReceiptDto?>(null) }
     var pickerToken by remember { mutableStateOf<String?>(null) }
     var pickerAccount by remember { mutableStateOf<String?>(null) }
+    var uncategorizedOnly by rememberSaveable(state.draft?.id) { mutableStateOf(false) }
+    var lastCategoryEditedId by rememberSaveable(state.draft?.id) { mutableStateOf<Int?>(null) }
+    val possibleMovementIds = remember(state.parsed) {
+        state.parsed?.statement?.rows?.filter { it.possibleTransfer }?.map { it.rowId }?.toSet().orEmpty()
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && pickerToken == state.session?.token && pickerAccount == state.accountId) viewModel.choosePdf(uri)
     }
@@ -49,7 +55,7 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
         !state.recoveryUnavailable && !state.recoveryChecking
     LaunchedEffect(state.session?.token) { previewConfirmation = false; commitConfirmation = false; undoConfirmation = null; newAccount = false;
         recoveryReviewed = false; forgetConfirmation = false }
-    LazyColumn(Modifier.fillMaxSize().widthIn(max = 680.dp).testTag("imports_screen"),
+    LazyColumn(Modifier.widthIn(max = 680.dp).fillMaxSize().testTag("imports_screen"),
         contentPadding = PaddingValues(20.dp, 16.dp, 20.dp, 30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -131,12 +137,8 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
                             "Текущий баланс отличается от начала выписки. Импорт прибавит операции к текущему балансу; начальный остаток существующего счёта не изменится.", true)
                     }
                 }
-                Text("Часовой пояс дат выписки", style = MaterialTheme.typography.labelMedium)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Asia/Qyzylorda" to "Кызылорда", "Asia/Almaty" to "Алматы").forEach { (zone, title) ->
-                        FilterChip(state.timezone == zone, onClick = { viewModel.setTimezone(zone) }, label = { Text(title) }, enabled = editable)
-                    }
-                }
+                Text("Даты выписки — по времени Казахстана, UTC+5", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         state.parsed?.statement?.let { statement -> item {
@@ -158,11 +160,37 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
             }
         } }
         state.draft?.let { draft ->
+            val visibleRows = if (!uncategorizedOnly) draft.rows else draft.rows.filter { row ->
+                val choice = state.choices[row.rowId]
+                choice?.selected == true && !choice.excludeFromAnalytics && (state.categories.none {
+                    it.id == choice.categoryId && it.kind == row.kind && !it.archived
+                } || (row.rowId == lastCategoryEditedId && state.similarCategoryCount(row.rowId) > 0))
+            }
+            val visibleIds = visibleRows.map { it.rowId }.toSet()
+            val otherMovementReviews = if (!uncategorizedOnly) emptyList() else draft.rows.filter { row ->
+                val choice = state.choices[row.rowId]
+                row.rowId in possibleMovementIds && choice?.selected == true && !choice.transferReviewed && row.rowId !in visibleIds
+            }
             item {
                 ImportCard {
-                    Text("4. Выберите записи", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("4. Категории и проверка", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     Text("Выбрано ${state.selectedCount} из ${draft.rows.size}. Уже импортированные и возможные повторы исключены по умолчанию.")
-                    Text("Одинаковые покупки внутри выписки остаются отдельными записями. Переводы и снятия проверьте вручную.", style = MaterialTheme.typography.bodySmall)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ImportCategoryStat("АВТООПРЕДЕЛЕНО", state.autoCategorizedCount)
+                        ImportCategoryStat("БЕЗ КАТЕГОРИИ", state.uncategorizedCount)
+                    }
+                    Text("Категории уже подобраны там, где удалось найти соответствие. Любую можно исправить. Остальные записи можно импортировать без категории и разобрать позже.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        FilterChip(!uncategorizedOnly, onClick = { uncategorizedOnly = false; lastCategoryEditedId = null }, label = { Text("Все · ${draft.rows.size}") },
+                            modifier = Modifier.testTag("import_filter_all"))
+                        FilterChip(uncategorizedOnly, onClick = { uncategorizedOnly = true; lastCategoryEditedId = null }, label = { Text("Без категории · ${state.uncategorizedCount}") },
+                            modifier = Modifier.testTag("import_filter_uncategorized"))
+                    }
+                    if (uncategorizedOnly && lastCategoryEditedId?.let { state.similarCategoryCount(it) > 0 } == true)
+                        Text("Последняя исправленная запись остаётся здесь, чтобы применить её категорию к похожим.",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Одинаковые покупки внутри выписки остаются отдельными записями. Переводы и снятия требуют отдельной проверки.", style = MaterialTheme.typography.bodySmall)
                     Text("Баланс до импорта: ${Money.format(draft.balanceBeforeMinor, "KZT")}")
                     state.projectedBalance?.let { Text("Прогноз выбранного импорта: ${Money.format(it.toString(), "KZT")}") }
                     if (state.needsTransferReview) ImportMessage("Для отмеченных возможных переводов выберите способ учёта ниже.", true)
@@ -176,12 +204,27 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
                     }
                     Button(onClick = { commitConfirmation = true }, enabled = state.canCommit && !manualPending,
                         shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(16.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("import_commit")) { Text("Импортировать выбранные") }
+                        modifier = Modifier.fillMaxWidth().testTag("import_commit")) { Text("Импортировать · ${state.selectedCount}") }
                 }
             }
-            items(draft.rows, key = { "preview_${it.rowId}" }) { row ->
-                val possibleTransfer = state.parsed?.statement?.rows?.firstOrNull { it.rowId == row.rowId }?.possibleTransfer == true
-                ImportReviewRow(row, state.choices[row.rowId] ?: ImportRowChoice(false), possibleTransfer, state, viewModel, editable)
+            if (otherMovementReviews.isNotEmpty()) {
+                item {
+                    ImportMessage("Ещё ${otherMovementReviews.size} записей с категориями требуют проверки движения денег. Они показаны ниже, чтобы ничего не пропустить.", true)
+                }
+                items(otherMovementReviews, key = { "movement_review_${it.rowId}" }) { row ->
+                    ImportReviewRow(row, state.choices[row.rowId] ?: ImportRowChoice(false), true, state, viewModel, editable) { lastCategoryEditedId = it }
+                }
+            }
+            if (uncategorizedOnly && visibleRows.isEmpty()) item {
+                ImportCard {
+                    Text("С категориями разобрались.", style = MaterialTheme.typography.titleLarge)
+                    Text("У всех выбранных доходов и расходов есть категория. Проверьте движение денег и повторы перед импортом.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { uncategorizedOnly = false }, modifier = Modifier.testTag("import_show_all")) { Text("Показать все записи") }
+                }
+            }
+            items(visibleRows, key = { "preview_${it.rowId}" }) { row ->
+                ImportReviewRow(row, state.choices[row.rowId] ?: ImportRowChoice(false), row.rowId in possibleMovementIds, state, viewModel, editable) { lastCategoryEditedId = it }
             }
         }
         state.receipt?.let { receipt -> item {
@@ -200,7 +243,8 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
         }
         items(state.history, key = { "history_${it.id}" }) { receipt -> ImportCard {
             Text("${receipt.bank.replaceFirstChar { it.uppercase() }} · ${when (receipt.status) { "committed" -> "Сохранён"; "undone" -> "Отменён"; else -> "Черновик" }}", fontWeight = FontWeight.SemiBold)
-            Text("${state.accounts.firstOrNull { it.id == receipt.accountId }?.name ?: "Счёт импорта"} · ${receipt.createdAt}",
+            val date = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm").withZone(ZoneId.of(state.timezone)).format(Instant.parse(receipt.createdAt))
+            Text("${state.accounts.firstOrNull { it.id == receipt.accountId }?.name ?: "Счёт импорта"} · $date",
                 style = MaterialTheme.typography.bodySmall)
             Text("Добавлено ${receipt.importedCount}, не выбрано ${receipt.skippedCount}", style = MaterialTheme.typography.bodySmall)
             if (receipt.status == "committed") TextButton(onClick = { undoConfirmation = receipt }, enabled = editable,
@@ -208,7 +252,7 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
         } }
     }
     if (previewConfirmation) AlertDialog(onDismissRequest = { previewConfirmation = false }, title = { Text("Проверить операции на сервере?") },
-        text = { Text("Будут переданы разобранные записи и остатки для проверки повторов. Исходный PDF не передаётся. Эта проверка ещё не добавляет операции на счёт.") },
+        text = { Text("Будут переданы разобранные записи и остатки для проверки повторов и подбора категорий. Исходный PDF не передаётся. Эта проверка ещё не добавляет операции на счёт.") },
         confirmButton = { TextButton(onClick = { previewConfirmation = false; viewModel.preview() }, enabled = editable) { Text("Передать на проверку") } },
         dismissButton = { TextButton(onClick = { previewConfirmation = false }) { Text("Отмена") } })
     if (commitConfirmation) AlertDialog(onDismissRequest = { commitConfirmation = false }, title = { Text("Сохранить выбранные операции?") },
@@ -232,16 +276,20 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ImportReviewRow(row: ImportPreviewRow, choice: ImportRowChoice, transfer: Boolean,
-    state: ImportUiState, viewModel: ImportViewModel, editable: Boolean) {
+    state: ImportUiState, viewModel: ImportViewModel, editable: Boolean, onCategoryEdited: (Int) -> Unit) {
+    var details by rememberSaveable(row.rowId) { mutableStateOf(false) }
+    val hasActiveCategory = state.categories.any { it.id == choice.categoryId && it.kind == row.kind && !it.archived }
     ImportCard {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(verticalAlignment = Alignment.Top) {
             Checkbox(choice.selected, onCheckedChange = { viewModel.selectRow(row.rowId, it) },
                 enabled = editable && row.duplicate != "exact" && (row.duplicate != "possible" || choice.allowPossibleDuplicate),
                 modifier = Modifier.testTag("import_row_${row.rowId}"))
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 val date = DateTimeFormatter.ISO_LOCAL_DATE.withZone(ZoneId.of(state.timezone)).format(Instant.parse(row.occurredAt))
-                Text("$date · ${if (row.kind == "income") "+" else "−"}${Money.format(row.amountMinor, "KZT")}", fontWeight = FontWeight.SemiBold)
-                Text(row.note.ifBlank { "Без описания" }, style = MaterialTheme.typography.bodySmall,
+                Text(row.note.ifBlank { "Без описания" }, style = MaterialTheme.typography.titleMedium,
+                    maxLines = if (details) Int.MAX_VALUE else 2, overflow = TextOverflow.Ellipsis)
+                Text("$date · ${if (row.kind == "income") "+" else "−"}${Money.format(row.amountMinor, "KZT")}",
+                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -253,20 +301,58 @@ private fun ImportReviewRow(row: ImportPreviewRow, choice: ImportRowChoice, tran
         }
         if (choice.selected) {
             if (transfer) {
-                Text("Похоже на перевод или движение наличных. Это подсказка, проверьте назначение сами.", style = MaterialTheme.typography.bodySmall)
+                Text(if (choice.transferReviewed) "Способ учёта проверен вами. Его можно изменить." else
+                    "Похоже на перевод или движение наличных. Выберите способ учёта: подсказка не подтверждает перевод автоматически.",
+                    style = MaterialTheme.typography.bodySmall)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextButton(onClick = { viewModel.movement(row.rowId, true) }, enabled = editable) { Text("Движение денег") }
-                    TextButton(onClick = { viewModel.movement(row.rowId, false) }, enabled = editable) { Text("Доход / расход") }
+                    FilterChip(choice.transferReviewed && choice.excludeFromAnalytics, onClick = { viewModel.movement(row.rowId, true) },
+                        label = { Text("Движение денег") }, enabled = editable,
+                        modifier = Modifier.testTag("import_as_movement_${row.rowId}"))
+                    FilterChip(choice.transferReviewed && !choice.excludeFromAnalytics, onClick = { viewModel.movement(row.rowId, false) },
+                        label = { Text("Доход / расход") }, enabled = editable,
+                        modifier = Modifier.testTag("import_as_transaction_${row.rowId}"))
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            if (transfer || details || choice.excludeFromAnalytics) Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(choice.excludeFromAnalytics, onCheckedChange = { viewModel.movement(row.rowId, it) }, enabled = editable,
                     modifier = Modifier.testTag("import_movement_${row.rowId}"))
-                Text("Перевод между своими счетами / движение денег — исключить из аналитики", style = MaterialTheme.typography.bodySmall)
+                Text("Движение денег — вне доходов и расходов", style = MaterialTheme.typography.bodySmall)
             }
             if (choice.excludeFromAnalytics) Text("Запись изменит баланс, но не войдёт в доходы и расходы отчётов.", style = MaterialTheme.typography.labelSmall)
-            CategorySelector(state.categories, row.kind, choice.categoryId, { viewModel.category(row.rowId, it) },
-                enabled = editable, tagPrefix = "import_category_${row.rowId}")
+            if (!choice.excludeFromAnalytics) {
+                val label = if (!hasActiveCategory) "Выберите категорию или оставьте на потом" else if (choice.categoryEdited) "Выбрано вами" else when (row.categorySuggestionSource) {
+                    "history" -> "По вашим операциям"
+                    "rule" -> "Определено автоматически"
+                    else -> "Категория"
+                }
+                Text(label, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("import_category_origin_${row.rowId}"))
+                CategorySelector(state.categories.filter { !it.archived || it.id == choice.categoryId }, row.kind, choice.categoryId,
+                    { viewModel.category(row.rowId, it); onCategoryEdited(row.rowId) }, enabled = editable, tagPrefix = "import_category_${row.rowId}")
+                val similar = if (choice.categoryEdited && hasActiveCategory) state.similarCategoryCount(row.rowId) else 0
+                if (choice.categoryEdited && hasActiveCategory && similar > 0) {
+                    OutlinedButton(onClick = { viewModel.applyCategoryToSimilar(row.rowId) }, enabled = editable,
+                        shape = P0Shape, modifier = Modifier.fillMaxWidth().testTag("import_apply_similar_${row.rowId}")) {
+                        Text("Применить к похожим ($similar)")
+                    }
+                    Text("Только выбранные операции. Другие ручные исправления сохранятся.", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            TextButton(onClick = { details = !details }, modifier = Modifier.testTag("import_details_${row.rowId}")) {
+                Text(if (details) "Свернуть детали ↑" else "Параметры операции ↗")
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImportCategoryStat(label: String, count: Int) {
+    Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(count.toString(), style = MaterialTheme.typography.headlineSmall)
+            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -297,7 +383,7 @@ private fun ImportNewAccountDialog(state: ImportUiState, viewModel: ImportViewMo
 }
 
 @Composable private fun ImportCard(content: @Composable ColumnScope.() -> Unit) {
-    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    Card(shape = P0Shape, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
     }

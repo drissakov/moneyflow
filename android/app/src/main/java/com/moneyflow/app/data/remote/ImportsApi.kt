@@ -46,6 +46,9 @@ data class ImportPreviewRow(
     val note: String,
     val duplicate: String,
     @SerializedName("matching_count") val matchingCount: Int,
+    @SerializedName("suggested_category_id") val suggestedCategoryId: String? = null,
+    @SerializedName("category_suggestion_source") val categorySuggestionSource: String? = null,
+    @SerializedName("category_match_key") val categoryMatchKey: String? = null,
 )
 
 data class ImportPreviewDto(
@@ -75,6 +78,10 @@ data class ImportPreviewDto(
             require(it.duplicate in setOf("new", "possible", "exact") && it.matchingCount >= 0)
             require(it.duplicate != "new" || it.matchingCount == 0)
             require(it.duplicate != "possible" || it.matchingCount > 0)
+            it.suggestedCategoryId?.let(::validateUuid)
+            require((it.suggestedCategoryId == null) == (it.categorySuggestionSource == null))
+            require(it.categorySuggestionSource == null || it.categorySuggestionSource in setOf("history", "rule"))
+            require(it.categoryMatchKey == null || it.categoryMatchKey.matches(Regex("v1:[0-9a-f]{64}")))
         }
     }
 }

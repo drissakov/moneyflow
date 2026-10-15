@@ -15,6 +15,7 @@ import com.moneyflow.app.data.domain.Account
 import com.moneyflow.app.data.domain.Category
 import com.moneyflow.app.data.domain.Money
 import com.moneyflow.app.data.domain.SupportedCurrency
+import com.moneyflow.app.data.imports.KazakhstanStatementTime
 import com.moneyflow.app.data.imports.ParsedPdfStatement
 import com.moneyflow.app.data.imports.StatementPdfReader
 import com.moneyflow.app.data.imports.StatementImportException
@@ -25,14 +26,12 @@ import retrofit2.HttpException
 import java.io.IOException
 import java.math.BigInteger
 import java.time.Instant
-import java.time.ZoneId
 
 data class ImportUiState(
     val session: Session? = null,
     val accounts: List<Account> = emptyList(),
     val categories: List<Category> = emptyList(),
     val accountId: String? = null,
-    val timezone: String = "Asia/Qyzylorda",
     val parsed: ParsedPdfStatement? = null,
     val draft: ImportPreviewDto? = null,
     val choices: Map<Int, ImportRowChoice> = emptyMap(),
@@ -50,8 +49,20 @@ data class ImportUiState(
     val recoveryChecking: Boolean = false,
     val historyVerified: Boolean = false,
 ) {
+    val timezone: String get() = KazakhstanStatementTime.TIMEZONE
     val account: Account? get() = accounts.firstOrNull { it.id == accountId }
     val selectedCount: Int get() = choices.values.count { it.selected }
+    val autoCategorizedCount: Int get() = draft?.rows?.count { row ->
+        choices[row.rowId]?.let { choice -> choice.selected && !choice.excludeFromAnalytics && !choice.categoryEdited &&
+            activeImportCategory(categories, choice.categoryId, row.kind) } == true
+    } ?: 0
+    val uncategorizedCount: Int get() = draft?.rows?.count { row ->
+        choices[row.rowId]?.let { choice -> choice.selected && !choice.excludeFromAnalytics &&
+            !activeImportCategory(categories, choice.categoryId, row.kind) } == true
+    } ?: 0
+    fun similarCategoryCount(rowId: Int): Int = draft?.let {
+        similarImportCategoryRows(it.rows, choices, categories, rowId).size
+    } ?: 0
     val projectedBalance: BigInteger? get() = draft?.let { preview ->
         preview.rows.filter { choices[it.rowId]?.selected == true }.fold(BigInteger(preview.balanceBeforeMinor)) { sum, row ->
             val amount = BigInteger(row.amountMinor)
@@ -117,7 +128,22 @@ class ImportViewModel(
                             }
                         }
                     }
-                    launch { repository.observeCategories(session.user.id).collect { if (current(session)) _state.update { s -> s.copy(categories = it) } } }
+                    launch { repository.observeCategories(session.user.id).collect { categories ->
+                        if (current(session)) _state.update { before ->
+                            val draft = before.draft
+                            val rowsById = draft?.rows?.associateBy { it.rowId }.orEmpty()
+                            val choices = if (draft == null || before.pending != null || before.busy) before.choices else
+                                before.choices.mapValues { (id, choice) ->
+                                    val row = rowsById[id]
+                                    if (row == null) choice else {
+                                        val categoryId = choice.categoryId?.takeIf { activeImportCategory(categories, it, row.kind) }
+                                            ?: row.suggestedCategoryId?.takeIf { !choice.categoryEdited && activeImportCategory(categories, it, row.kind) }
+                                        choice.copy(categoryId = categoryId)
+                                    }
+                                }
+                            before.copy(categories = categories, choices = choices)
+                        }
+                    } }
                     launch { runCatching { repository.refreshCategories() } }
                     launch { loadHistory(session) }
                 }
@@ -131,10 +157,6 @@ class ImportViewModel(
         generation++; actionJob?.cancel()
         _state.update { it.copy(accountId = id, draft = null, choices = emptyMap(), busy = false, parsing = false,
             error = null, receipt = null, balanceDifferenceAccepted = false) }
-    }
-    fun setTimezone(value: String) {
-        if (state.value.pending != null || state.value.recoveryUnavailable || state.value.recoveryChecking || state.value.busy) return
-        _state.update { it.copy(timezone = value, draft = null, choices = emptyMap(), balanceDifferenceAccepted = false) }
     }
     fun choosePdf(uri: Uri) {
         if (state.value.pending != null || state.value.recoveryUnavailable || state.value.recoveryChecking) return
@@ -198,16 +220,15 @@ class ImportViewModel(
         val parsed = requireNotNull(state.parsed) { "Выберите PDF" }
         require(parsed.statement.errors.isEmpty()) { "Ошибки разбора блокируют импорт" }
         val account = requireNotNull(state.account) { "Выберите счёт в KZT" }
-        val zone = ZoneId.of(state.timezone)
-        val request = ImportPreviewRequest(account.id, parsed.statement.bank, "KZT", parsed.fileSha256, zone.id,
-            parsed.statement.openingBalanceMinor?.toString(), parsed.statement.closingBalanceMinor?.toString(),
-            parsed.statement.rows.map { row -> ImportSourceRow(row.rowId, row.date.atStartOfDay(zone).toInstant().toString(),
-                row.kind, row.amountMinor.toString(), normalizeBankNote(row.note)) })
+        val request = parsed.toPreview(account.id)
+        repository.refreshCategories()
+        val categories = repository.observeCategories(session.user.id).first()
+        if (!current(session, version) || state.accountId != this.state.value.accountId) return@action
+        _state.update { it.copy(categories = categories) }
         val preview = repository.previewImport(request, session)
         if (!current(session, version) || state.accountId != this.state.value.accountId) return@action
-        _state.update { it.copy(draft = preview, choices = preview.rows.associate { row ->
-            row.rowId to ImportRowChoice(selected = row.duplicate == "new")
-        }, receipt = null, balanceDifferenceAccepted = false) }
+        _state.update { it.copy(draft = preview, choices = initialImportChoices(preview.rows, it.categories),
+            receipt = null, balanceDifferenceAccepted = false) }
     }
 
     fun selectRow(id: Int, selected: Boolean) = updateChoice(id) { it.copy(selected = selected,
@@ -216,8 +237,17 @@ class ImportViewModel(
     fun movement(id: Int, excluded: Boolean) = updateChoice(id) { it.copy(excludeFromAnalytics = excluded, transferReviewed = true) }
     fun category(id: Int, categoryId: String?) {
         val row = state.value.draft?.rows?.firstOrNull { it.rowId == id } ?: return
-        if (categoryId != null && state.value.categories.none { it.id == categoryId && it.kind == row.kind && !it.archived }) return
-        updateChoice(id) { it.copy(categoryId = categoryId) }
+        if (categoryId != null && !activeImportCategory(state.value.categories, categoryId, row.kind)) return
+        updateChoice(id) { it.copy(categoryId = categoryId, categoryEdited = true) }
+    }
+    fun applyCategoryToSimilar(id: Int) {
+        val before = state.value
+        if (before.pending != null || before.recoveryUnavailable || before.recoveryChecking || before.busy) return
+        val rows = before.draft?.rows ?: return
+        _state.update { current -> current.copy(
+            choices = applyImportCategoryToSimilar(rows, current.choices, current.categories, id),
+            balanceDifferenceAccepted = false,
+        ) }
     }
     fun acceptBalanceDifference(accepted: Boolean) { if (state.value.pending == null) _state.update { it.copy(balanceDifferenceAccepted = accepted) } }
 

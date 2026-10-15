@@ -19,13 +19,16 @@ import (
 )
 
 type ImportPreviewRowView struct {
-	RowID         int       `json:"row_id"`
-	OccurredAt    time.Time `json:"occurred_at"`
-	Kind          string    `json:"kind"`
-	AmountMinor   string    `json:"amount_minor"`
-	Note          string    `json:"note"`
-	Duplicate     string    `json:"duplicate"`
-	MatchingCount int64     `json:"matching_count"`
+	RowID                    int       `json:"row_id"`
+	OccurredAt               time.Time `json:"occurred_at"`
+	Kind                     string    `json:"kind"`
+	AmountMinor              string    `json:"amount_minor"`
+	Note                     string    `json:"note"`
+	Duplicate                string    `json:"duplicate"`
+	MatchingCount            int64     `json:"matching_count"`
+	SuggestedCategoryID      *string   `json:"suggested_category_id"`
+	CategorySuggestionSource *string   `json:"category_suggestion_source"`
+	CategoryMatchKey         *string   `json:"category_match_key"`
 }
 
 type ImportPreviewView struct {
@@ -126,6 +129,10 @@ func (s *Service) PreviewImport(ctx context.Context, userID string, input Import
 		if err != nil {
 			return err
 		}
+		suggestions, err := suggestImportCategories(tx, userID, draft.Bank, rows)
+		if err != nil {
+			return err
+		}
 		view = ImportPreviewView{ID: draft.ID, AccountID: draft.AccountID, Bank: draft.Bank, Currency: draft.Currency, Status: draft.Status,
 			ExpiresAt: draft.ExpiresAt, BalanceBeforeMinor: strconv.FormatInt(balance, 10), OpeningBalanceMinor: optionalBalanceText(draft.OpeningBalanceMinor), ClosingBalanceMinor: optionalBalanceText(draft.ClosingBalanceMinor), Rows: make([]ImportPreviewRowView, 0, len(rows))}
 		for i := range rows {
@@ -140,7 +147,7 @@ func (s *Service) PreviewImport(ctx context.Context, userID string, input Import
 			if exact[row.RowID] {
 				duplicate = "exact"
 			}
-			view.Rows = append(view.Rows, ImportPreviewRowView{RowID: row.RowID, OccurredAt: row.OccurredAt, Kind: row.Kind, AmountMinor: strconv.FormatInt(row.AmountMinor, 10), Note: row.Note, Duplicate: duplicate, MatchingCount: row.MatchingCount})
+			view.Rows = append(view.Rows, ImportPreviewRowView{RowID: row.RowID, OccurredAt: row.OccurredAt, Kind: row.Kind, AmountMinor: strconv.FormatInt(row.AmountMinor, 10), Note: row.Note, Duplicate: duplicate, MatchingCount: row.MatchingCount, SuggestedCategoryID: suggestions[row.RowID].CategoryID, CategorySuggestionSource: suggestions[row.RowID].Source, CategoryMatchKey: suggestions[row.RowID].MatchKey})
 		}
 		if err := tx.Create(&draft).Error; err != nil {
 			return err

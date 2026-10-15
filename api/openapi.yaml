@@ -2090,7 +2090,12 @@ components:
     StatementPreviewRequest:
       type: object
       additionalProperties: false
-      required: [account_id, bank, currency, file_sha256, timezone, rows]
+      required:
+      - account_id
+      - bank
+      - currency
+      - file_sha256
+      - rows
       properties:
         account_id:
           type: string
@@ -2099,15 +2104,17 @@ components:
           $ref: '#/components/schemas/StatementBank'
         currency:
           type: string
-          enum: [KZT]
+          enum:
+          - KZT
         file_sha256:
           type: string
-          pattern: '^[0-9a-f]{64}$'
+          pattern: ^[0-9a-f]{64}$
         timezone:
           type: string
-          minLength: 1
           maxLength: 100
-          example: Asia/Qyzylorda
+          default: Etc/GMT-5
+          description: IANA timezone. Empty or omitted means fixed Kazakhstan UTC+5 (Etc/GMT-5). Explicit legacy zones
+            retain their historical rules.
         opening_balance_minor:
           type: string
           nullable: true
@@ -2125,7 +2132,17 @@ components:
     StatementPreviewRow:
       type: object
       additionalProperties: false
-      required: [row_id, occurred_at, kind, amount_minor, note, duplicate, matching_count]
+      required:
+      - row_id
+      - occurred_at
+      - kind
+      - amount_minor
+      - note
+      - duplicate
+      - matching_count
+      - suggested_category_id
+      - category_suggestion_source
+      - category_match_key
       properties:
         row_id:
           type: integer
@@ -2143,11 +2160,34 @@ components:
           maxLength: 500
         duplicate:
           type: string
-          enum: [new, possible, exact]
+          enum:
+          - new
+          - possible
+          - exact
         matching_count:
           type: integer
           format: int64
           minimum: 0
+        suggested_category_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Advisory active category of the matching income/expense kind. Unknown, ambiguous history or unavailable
+            targets return null. Commit uses explicit client selections only.
+        category_suggestion_source:
+          type: string
+          enum:
+          - history
+          - rule
+          nullable: true
+          description: Unanimous valid same-bank owner history precedes deterministic merchant/strong phrase rules.
+            Conflicting history suppresses rule fallback. Null when no suggestion.
+        category_match_key:
+          type: string
+          pattern: ^v1:[0-9a-f]{64}$
+          nullable: true
+          description: Opaque owner/bank/kind/semantic-scoped merchant grouping identity for optional UI batch corrections;
+            never a deduplication or authorization key. Generic notes and personal transfers have no key.
     StatementPreview:
       type: object
       required: [id, account_id, bank, currency, status, expires_at, balance_before_minor, opening_balance_minor, closing_balance_minor, rows]
