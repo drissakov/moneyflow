@@ -9,6 +9,9 @@ data class Category(
     val name: String,
     val parentId: String?,
     val isDefault: Boolean,
+    val archived: Boolean = false,
+    val sortOrder: Int = 0,
+    val version: Long = 1,
 )
 
 data class AnalyticsCategory(

@@ -9,6 +9,27 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 internal object NavigationIcons {
+    val Home = icon("Home") {
+        moveTo(3f, 10f); lineTo(12f, 3f); lineTo(21f, 10f)
+        moveTo(5f, 9f); lineTo(5f, 21f); lineTo(10f, 21f); lineTo(10f, 15f)
+        lineTo(14f, 15f); lineTo(14f, 21f); lineTo(19f, 21f); lineTo(19f, 9f)
+    }
+    val History = icon("History") {
+        moveTo(7f, 4f); lineTo(20f, 4f)
+        moveTo(7f, 10f); lineTo(20f, 10f)
+        moveTo(7f, 16f); lineTo(15f, 16f)
+        moveTo(3f, 4f); lineTo(3.2f, 4f)
+        moveTo(3f, 10f); lineTo(3.2f, 10f)
+        moveTo(3f, 16f); lineTo(3.2f, 16f)
+        moveTo(16f, 21f); lineTo(21f, 16f)
+        moveTo(17f, 16f); lineTo(21f, 16f); lineTo(21f, 20f)
+    }
+    val More = icon("More") {
+        moveTo(4f, 6f); lineTo(20f, 6f)
+        moveTo(4f, 12f); lineTo(15f, 12f)
+        moveTo(4f, 18f); lineTo(20f, 18f)
+        moveTo(19f, 12f); lineTo(20f, 12f)
+    }
     val Overview = icon("Overview") {
         moveTo(5f, 5f); lineTo(19f, 5f); lineTo(19f, 9f)
         moveTo(19f, 15f); lineTo(19f, 19f); lineTo(5f, 19f)

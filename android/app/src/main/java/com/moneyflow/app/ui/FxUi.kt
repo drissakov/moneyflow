@@ -105,15 +105,19 @@ internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewMode
     val usesRates = dates.isNotEmpty()
     var currencyMenu by rememberSaveable { mutableStateOf(false) }
     var details by rememberSaveable { mutableStateOf(false) }
-    val accountCount = state.accounts.size
-    val currencyCount = state.accounts.map { it.currency }.distinct().size
+    val included = state.accounts.filter { it.includeInBalance }
+    val accountCount = included.size
+    val currencyCount = included.map { it.currency }.distinct().size
     val countLabel = "$accountCount ${countWord(accountCount, "счёт", "счёта", "счетов")} · $currencyCount ${countWord(currencyCount, "валюта", "валюты", "валют")}"
-    Surface(shape = RoundedCornerShape(24.dp), color = colors.primary, contentColor = colors.onPrimary,
+    Surface(shape = P0Shape, color = colors.primary, contentColor = colors.onPrimary,
         modifier = Modifier.fillMaxWidth().testTag("portfolio_card")) {
-        Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("Общий баланс", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium,
-                    modifier = Modifier.weight(1f))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("КАПИТАЛ / СЕГОДНЯ", style = MaterialTheme.typography.labelSmall,
+                        color = colors.onPrimary.copy(alpha = .65f))
+                    Text("Общий баланс", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
+                }
                 Box {
                     OutlinedButton(onClick = { currencyMenu = true }, enabled = !state.working,
                         shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
@@ -139,7 +143,7 @@ internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewMode
             when {
                 portfolio?.complete == true -> {
                     Text((if (usesRates) "≈ " else "") + Money.format(requireNotNull(portfolio.totalBalanceMinor), state.baseCurrency),
-                        style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.Bold,
                         modifier = Modifier.testTag("portfolio_total"))
                 }
                 portfolio != null -> {
@@ -162,7 +166,19 @@ internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewMode
                     }, style = MaterialTheme.typography.bodySmall, color = colors.onPrimary.copy(alpha = 0.8f))
                 }
             }
-            Text(countLabel, style = MaterialTheme.typography.bodyMedium, color = colors.onPrimary.copy(alpha = 0.78f))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(countLabel, style = MaterialTheme.typography.bodyMedium, color = colors.onPrimary.copy(alpha = 0.78f),
+                    modifier = Modifier.weight(1f))
+                androidx.compose.foundation.Canvas(Modifier.size(width = 52.dp, height = 28.dp)) {
+                    listOf(1f, 3f, 4f, 7f, 9f, 10f, 13f, 16f, 17f, 20f, 22f).forEachIndexed { index, x ->
+                        val px = x / 23f * size.width
+                        drawLine(colors.onPrimary.copy(alpha = .6f), androidx.compose.ui.geometry.Offset(px, if (index % 3 == 0) 0f else size.height * .3f),
+                            androidx.compose.ui.geometry.Offset(px, size.height), if (index % 2 == 0) 2.dp.toPx() else 1.dp.toPx())
+                    }
+                }
+            }
+            if (included.size < state.accounts.size) Text("Вне общего баланса: ${state.accounts.size - included.size}",
+                style = MaterialTheme.typography.labelSmall, color = colors.onPrimary.copy(alpha = .78f))
             if (state.basePreferencePending) StatusBadge("Выбор сохранён на устройстве · ожидает синхронизации", false)
             if (portfolio != null) {
                 if (stale) StatusBadge("Устаревшие курсы · оценка приблизительная", true)
@@ -193,7 +209,7 @@ internal fun PortfolioCard(state: MoneyFlowUiState, viewModel: MoneyFlowViewMode
             TextButton(onClick = { details = !details }, colors = ButtonDefaults.textButtonColors(contentColor = colors.onPrimary.copy(alpha = 0.78f)),
                 modifier = Modifier.testTag("portfolio_details")) { Text(if (details) "Скрыть расчёт" else "Как рассчитан баланс", style = MaterialTheme.typography.labelMedium) }
             if (details) {
-                Text("Остаток каждого счёта пересчитывается в ${state.baseCurrency}, затем суммы складываются. Выбор счёта для операций не меняет общий итог.",
+                Text("Остатки счетов с включённым параметром «В общем балансе» пересчитываются в ${state.baseCurrency} и складываются. Архивирование само по себе не исключает счёт из расчёта.",
                     style = MaterialTheme.typography.bodySmall, color = colors.onPrimary.copy(alpha = 0.8f))
                 Text("Справочная оценка по ежедневным курсам. Курс обмена в вашем банке может отличаться; деньги на счетах остаются в исходных валютах.",
                     style = MaterialTheme.typography.bodySmall, color = colors.onPrimary.copy(alpha = 0.8f))
@@ -228,15 +244,19 @@ private fun rateDatesLabel(dates: List<String>): String {
 internal fun FxAccountCard(account: Account, state: MoneyFlowUiState, onSelect: () -> Unit) {
     val selected = state.selectedAccountId == account.id
     val estimate = state.portfolio?.accounts?.firstOrNull { it.id == account.id }
-    Card(onClick = onSelect, shape = RoundedCornerShape(20.dp),
+    Card(onClick = onSelect, shape = P0Shape,
         border = BorderStroke(if (selected) 1.5.dp else 1.dp,
             if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant),
         colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth().testTag("account_${account.id}").semantics { this.selected = selected }) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(account.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(account.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Text(account.currency, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = 8.dp))
+            }
             Text(Money.format(account.balanceMinor, account.currency), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
             when {
+                !account.includeInBalance -> Text("Вне общего баланса", style = MaterialTheme.typography.labelSmall)
                 account.currency == state.baseCurrency -> Text("${state.baseCurrency} · основная валюта",
                     style = MaterialTheme.typography.labelSmall)
                 estimate?.convertedBalanceMinor != null -> {

@@ -14,12 +14,16 @@ data class CategoryDto(
     val name: String,
     @SerializedName("parent_id") val parentId: String?,
     @SerializedName("is_default") val isDefault: Boolean,
+    val archived: Boolean? = null,
+    @SerializedName("sort_order") val sortOrder: Int? = null,
+    val version: Long? = null,
 ) {
     fun toDomain(): Category {
         validateUuid(id)
         validateCategoryFields(kind, name, parentId)
         require(id != parentId) { "Категория не может быть собственной подкатегорией" }
-        return Category(id, kind, name, parentId, isDefault)
+        return Category(id, kind, name, parentId, isDefault, archived ?: false, sortOrder ?: 0,
+            (version ?: 1).also { require(it >= 1) })
     }
 }
 

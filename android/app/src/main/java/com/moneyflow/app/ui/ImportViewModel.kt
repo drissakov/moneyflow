@@ -64,7 +64,8 @@ data class ImportUiState(
     val needsTransferReview: Boolean get() = parsed?.statement?.rows?.any {
         it.possibleTransfer && choices[it.rowId]?.let { c -> c.selected && !c.transferReviewed } == true
     } == true
-    val canCommit: Boolean get() = draft != null && pending == null && !busy && !recoveryUnavailable && !recoveryChecking && selectedCount > 0 && !needsTransferReview &&
+    val canCommit: Boolean get() = draft != null && account?.archived == false && draft.accountId == accountId &&
+        pending == null && !busy && !recoveryUnavailable && !recoveryChecking && selectedCount > 0 && !needsTransferReview &&
         (!differsFromStatement || balanceDifferenceAccepted) && projectedBalance?.let {
             it >= BigInteger.valueOf(Long.MIN_VALUE) && it <= BigInteger.valueOf(Long.MAX_VALUE)
         } == true
@@ -99,10 +100,20 @@ class ImportViewModel(
                 if (session != null) coroutineScope {
                     launch {
                         repository.observeAccounts(session.user.id).collect { accounts ->
-                            if (current(session)) _state.update {
-                                val suitable = accounts.filter { a -> a.currency == "KZT" }
-                                val selected = it.accountId?.takeIf { id -> suitable.any { a -> a.id == id } } ?: suitable.firstOrNull()?.id
-                                it.copy(accounts = suitable, accountId = selected)
+                            if (current(session)) {
+                                val inventory = accounts.filter { it.currency == "KZT" }
+                                val before = state.value
+                                val selected = before.pending?.accountId ?: before.accountId?.takeIf { id ->
+                                    inventory.any { it.id == id && (!it.archived || before.busy) }
+                                } ?: inventory.firstOrNull { !it.archived }?.id
+                                val changed = selected != before.accountId && before.pending == null && !before.busy
+                                if (changed) { generation++; actionJob?.cancel() }
+                                _state.update { it.copy(accounts = inventory, accountId = selected,
+                                    draft = if (changed) null else it.draft,
+                                    choices = if (changed) emptyMap() else it.choices,
+                                    busy = if (changed) false else it.busy,
+                                    parsing = if (changed) false else it.parsing,
+                                    balanceDifferenceAccepted = if (changed) false else it.balanceDifferenceAccepted) }
                             }
                         }
                     }
@@ -115,7 +126,8 @@ class ImportViewModel(
     }
 
     fun chooseAccount(id: String) {
-        if (state.value.pending != null || state.value.recoveryUnavailable || state.value.recoveryChecking || id == state.value.accountId) return
+        if (state.value.pending != null || state.value.recoveryUnavailable || state.value.recoveryChecking || id == state.value.accountId ||
+            state.value.accounts.none { it.id == id && !it.archived }) return
         generation++; actionJob?.cancel()
         _state.update { it.copy(accountId = id, draft = null, choices = emptyMap(), busy = false, parsing = false,
             error = null, receipt = null, balanceDifferenceAccepted = false) }
@@ -204,7 +216,7 @@ class ImportViewModel(
     fun movement(id: Int, excluded: Boolean) = updateChoice(id) { it.copy(excludeFromAnalytics = excluded, transferReviewed = true) }
     fun category(id: Int, categoryId: String?) {
         val row = state.value.draft?.rows?.firstOrNull { it.rowId == id } ?: return
-        if (categoryId != null && state.value.categories.none { it.id == categoryId && it.kind == row.kind }) return
+        if (categoryId != null && state.value.categories.none { it.id == categoryId && it.kind == row.kind && !it.archived }) return
         updateChoice(id) { it.copy(categoryId = categoryId) }
     }
     fun acceptBalanceDifference(accepted: Boolean) { if (state.value.pending == null) _state.update { it.copy(balanceDifferenceAccepted = accepted) } }
@@ -293,7 +305,7 @@ class ImportViewModel(
                 "Сохранённое подтверждение недоступно. Оно не удалено; новые импорты заблокированы. Обновите и проверьте историю.") }
             return
         }
-        if (error is HttpException && error.code() == 401) { repository.expireSession(); return }
+        if (error is HttpException && error.code() == 401) { repository.expireSession(session); return }
         val code = if (error is HttpException) runCatching {
             Gson().fromJson(error.response()?.errorBody()?.source()?.peek()?.readUtf8(), ErrorBody::class.java)?.error?.code
         }.getOrNull() else null
@@ -333,6 +345,8 @@ class ImportViewModel(
             code == "import_duplicate_exact" || code == "import_duplicate_possible" -> "Выбранные повторы требуют новой проверки. Ничего не сохранено этим запросом."
             code == "import_expired" -> "Проверка истекла. Создайте новый предпросмотр."
             code == "balance_overflow" -> "Импорт превышает допустимый баланс. Выберите меньше записей."
+            code == "archived_account" -> "Счёт в архиве. Верните его во вкладке «Счета» или выберите другой и повторите предпросмотр."
+            code == "archived_category" -> "Категория в архиве. Запросите новый предпросмотр и выберите действующую категорию."
             pending != null -> "Подтверждение не завершено. Проверьте историю и повторите исходный запрос."
             state.value.accountCreationUncertain -> "Счёт мог создаться. Обновите и проверьте список счетов перед повтором; можно выбрать уже появившийся счёт."
             error is IllegalArgumentException -> error.message ?: "Проверьте параметры импорта"

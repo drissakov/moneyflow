@@ -53,15 +53,13 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
         contentPadding = PaddingValues(20.dp, 16.dp, 20.dp, 30.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Импорт выписки", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("Текстовые PDF Kaspi и Halyk · счета в KZT", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                P0Heading("05.2", "Из выписки — в учёт.", "Текстовые PDF Kaspi и Halyk · счета в KZT")
             }
         }
         if (state.busy || state.historyLoading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         state.error?.let { item { ImportMessage(it, true) } }
         state.notice?.let { item { ImportMessage(it, false) } }
-        if (manualPending) item { ImportMessage("Сначала завершите ожидающую обычную операцию в обзоре.", true) }
+        if (manualPending) item { ImportMessage("Сначала завершите ожидающее изменение в истории операций.", true) }
         if (state.recoveryUnavailable) item {
             ImportCard {
                 Text("Подтверждение сохранено, но недоступно", fontWeight = FontWeight.Bold)
@@ -106,7 +104,7 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
                 Text("2. Выберите счёт", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 var expanded by rememberSaveable { mutableStateOf(false) }
                 Box {
-                    OutlinedButton(onClick = { expanded = true }, enabled = editable && state.accounts.isNotEmpty(),
+                    OutlinedButton(onClick = { expanded = true }, enabled = editable && state.accounts.any { !it.archived },
                         shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
                         modifier = Modifier.fillMaxWidth().testTag("import_account")) {
                         Text(state.account?.let { "${it.name} · ${Money.format(it.balanceMinor, "KZT")}" } ?: "Нет выбранного счёта в KZT",
@@ -114,12 +112,14 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
                         Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Выбрать счёт")
                     }
                     DropdownMenu(expanded, onDismissRequest = { expanded = false }, modifier = Modifier.heightIn(max = 300.dp)) {
-                        state.accounts.forEach { account -> DropdownMenuItem(text = { Text(account.name) },
+                        state.accounts.filterNot { it.archived }.forEach { account -> DropdownMenuItem(text = { Text(account.name) },
                             onClick = { expanded = false; viewModel.chooseAccount(account.id) },
                             modifier = Modifier.testTag("import_account_${account.id}")) }
                     }
                 }
                 TextButton(onClick = { newAccount = true }, enabled = editable, modifier = Modifier.testTag("import_new_account")) { Text("Создать счёт в KZT") }
+                if (state.account?.archived == true) Text("Счёт в архиве. Для нового импорта выберите действующий счёт или верните этот из архива. Повтор подтверждения проверяет исходный запрос.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (state.accountCreationUncertain) {
                     ImportMessage("Счёт мог создаться. Проверьте обновлённый список перед повторной попыткой.", true)
                     TextButton(onClick = viewModel::refreshAccountInventory, enabled = editable) { Text("Обновить счета") }
@@ -209,15 +209,17 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
     }
     if (previewConfirmation) AlertDialog(onDismissRequest = { previewConfirmation = false }, title = { Text("Проверить операции на сервере?") },
         text = { Text("Будут переданы разобранные записи и остатки для проверки повторов. Исходный PDF не передаётся. Эта проверка ещё не добавляет операции на счёт.") },
-        confirmButton = { TextButton(onClick = { previewConfirmation = false; viewModel.preview() }) { Text("Передать на проверку") } },
+        confirmButton = { TextButton(onClick = { previewConfirmation = false; viewModel.preview() }, enabled = editable) { Text("Передать на проверку") } },
         dismissButton = { TextButton(onClick = { previewConfirmation = false }) { Text("Отмена") } })
     if (commitConfirmation) AlertDialog(onDismissRequest = { commitConfirmation = false }, title = { Text("Сохранить выбранные операции?") },
         text = { Text("${state.selectedCount} записей изменят баланс выбранного счёта. Проверьте категории, возможные повторы и движение денег. Этот импорт можно отменить в истории.") },
-        confirmButton = { TextButton(onClick = { commitConfirmation = false; viewModel.commit() }, modifier = Modifier.testTag("import_commit_confirm")) { Text("Сохранить") } },
+        confirmButton = { TextButton(onClick = { commitConfirmation = false; viewModel.commit() }, enabled = editable && state.canCommit,
+            modifier = Modifier.testTag("import_commit_confirm")) { Text("Сохранить") } },
         dismissButton = { TextButton(onClick = { commitConfirmation = false }) { Text("Отмена") } })
     undoConfirmation?.let { receipt -> AlertDialog(onDismissRequest = { undoConfirmation = null }, title = { Text("Отменить этот импорт?") },
         text = { Text("Будут удалены оставшиеся операции из ${receipt.importedCount} записей, созданных этим импортом. Другие записи сохранятся; баланс и аналитика обновятся.") },
-        confirmButton = { TextButton(onClick = { undoConfirmation = null; viewModel.undo(receipt) }, modifier = Modifier.testTag("import_undo_confirm")) { Text("Удалить записи импорта") } },
+        confirmButton = { TextButton(onClick = { undoConfirmation = null; viewModel.undo(receipt) }, enabled = editable,
+            modifier = Modifier.testTag("import_undo_confirm")) { Text("Удалить записи импорта") } },
         dismissButton = { TextButton(onClick = { undoConfirmation = null }) { Text("Отмена") } }) }
     if (newAccount) ImportNewAccountDialog(state, viewModel) { newAccount = false }
     if (forgetConfirmation) AlertDialog(onDismissRequest = { forgetConfirmation = false },

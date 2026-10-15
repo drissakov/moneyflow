@@ -97,9 +97,7 @@ internal fun AnalyticsScreen(state: MoneyFlowUiState, viewModel: MoneyFlowViewMo
     ) {
         item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Аналитика", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-                Text("Ваш месяц в цифрах", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                P0Heading("04", "Картина месяца.", "Доходы, расходы и то, что за ними стоит.")
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     TextButton(onClick = { viewModel.setAnalyticsMonth(month.minusMonths(1).toString()) },
                         enabled = month > YearMonth.of(1, 1),

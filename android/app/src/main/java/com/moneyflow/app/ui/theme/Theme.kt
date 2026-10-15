@@ -32,7 +32,7 @@ private val LightColors = lightColorScheme(
     onTertiary = Color.White,
     tertiaryContainer = Color(0xFFE8E8E8),
     onTertiaryContainer = Color(0xFF242424),
-    background = Color(0xFFF7F7F7),
+    background = Color(0xFFF4F4F4),
     onBackground = Color(0xFF161616),
     surface = Color.White,
     onSurface = Color(0xFF161616),
@@ -157,9 +157,9 @@ fun MoneyFlowTheme(content: @Composable () -> Unit) {
         shapes = Shapes(
             extraSmall = RoundedCornerShape(8.dp),
             small = RoundedCornerShape(12.dp),
-            medium = RoundedCornerShape(16.dp),
-            large = RoundedCornerShape(20.dp),
-            extraLarge = RoundedCornerShape(24.dp),
+            medium = RoundedCornerShape(topStart = 20.dp, topEnd = 6.dp, bottomEnd = 20.dp, bottomStart = 6.dp),
+            large = RoundedCornerShape(topStart = 28.dp, topEnd = 8.dp, bottomEnd = 28.dp, bottomStart = 8.dp),
+            extraLarge = RoundedCornerShape(topStart = 32.dp, topEnd = 10.dp, bottomEnd = 32.dp, bottomStart = 10.dp),
         ),
         content = content,
     )

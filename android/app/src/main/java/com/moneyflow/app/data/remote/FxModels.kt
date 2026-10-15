@@ -167,7 +167,8 @@ data class PortfolioDto(
     }
 
     /** Never display a cached valuation if any source balance, currency or account membership changed. */
-    fun matchesAccounts(current: List<Account>): Boolean {
+    fun matchesAccounts(allAccounts: List<Account>): Boolean {
+        val current = allAccounts.filter { it.includeInBalance }
         if (accounts.size != current.size || accounts.map { it.id }.distinct().size != accounts.size ||
             current.map { it.id }.distinct().size != current.size) return false
         val source = accounts.associateBy { it.id }

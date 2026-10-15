@@ -6,6 +6,8 @@ import android.content.SharedPreferences
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.google.gson.JsonObject
+import okhttp3.RequestBody
 import com.moneyflow.app.data.domain.User
 import com.moneyflow.app.data.local.MoneyFlowDatabase
 import com.moneyflow.app.data.remote.*
@@ -151,6 +153,11 @@ class FxRepositoryTest {
     private fun auth(id: String, email: String) = AuthResponse("token-$id", Instant.now().plusSeconds(3600).toString(), User(id, email))
 
     private abstract class StubApi : MoneyFlowApi {
+        override suspend fun history(accountId: String?, limit: Int, cursor: String?, query: String?, from: String?, to: String?, categoryId: String?, kind: String?, includeDeleted: Boolean, authorization: String): TransactionsResponse = error("Unused P0 history API")
+        override suspend fun transfer(id: String, authorization: String): TransferDto = error("Unused P0 transfer API")
+        override suspend fun ledgerPut(path: String, body: RequestBody, key: String, authorization: String): JsonObject = error("Unused P0 mutation API")
+        override suspend fun ledgerPost(path: String, body: RequestBody, key: String, authorization: String): JsonObject = error("Unused P0 mutation API")
+        override suspend fun ledgerDelete(path: String, body: RequestBody, key: String, authorization: String): JsonObject = error("Unused P0 mutation API")
         override suspend fun register(credentials: Credentials): AuthResponse = error("Unused API")
         override suspend fun login(credentials: Credentials): AuthResponse = error("Unused API")
         override suspend fun logout(authorization: String?) = Unit

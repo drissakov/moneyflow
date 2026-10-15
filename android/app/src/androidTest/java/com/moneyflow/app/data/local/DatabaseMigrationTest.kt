@@ -15,6 +15,30 @@ import org.junit.runner.RunWith
 class DatabaseMigrationTest {
     @get:Rule val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), MoneyFlowDatabase::class.java)
 
+    @Test fun migrateFourToFivePreservesHistoryAndDefaultsBeforeP0() {
+        val name = "moneyflow-ledger-migration-test"
+        helper.createDatabase(name, 4).apply {
+            execSQL("INSERT INTO accounts VALUES ('user-a','account-a','Cash','KZT',1000,850,'2026-01-01T00:00:00Z')")
+            execSQL("INSERT INTO categories VALUES ('user-a','category-a','expense','Coffee',NULL,0)")
+            execSQL("INSERT INTO transactions (userId,id,accountId,kind,amountMinor,currency,note,occurredAt,createdAt,categoryId,excludeFromAnalytics) VALUES ('user-a','tx-a','account-a','expense',150,'KZT','Coffee','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','category-a',1)")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 5, true, MoneyFlowDatabase.MIGRATION_4_5).apply {
+            query("SELECT balanceMinor,type,archived,includeInBalance,sortOrder,version FROM accounts WHERE id='account-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals(850L, it.getLong(0)); assertEquals("card", it.getString(1))
+                assertEquals(0, it.getInt(2)); assertEquals(1, it.getInt(3)); assertEquals(0, it.getInt(4)); assertEquals(1L, it.getLong(5))
+            }
+            query("SELECT amountMinor,categoryId,excludeFromAnalytics,version,deletedAt,source,transferId FROM transactions WHERE id='tx-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals(150L, it.getLong(0)); assertEquals("category-a", it.getString(1))
+                assertEquals(1, it.getInt(2)); assertEquals(1L, it.getLong(3)); assertTrue(it.isNull(4)); assertEquals("manual", it.getString(5)); assertTrue(it.isNull(6))
+            }
+            query("SELECT archived,version FROM categories WHERE id='category-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)); assertEquals(1L, it.getLong(1))
+            }
+            close()
+        }
+    }
+
     @Test fun migrateThreeToFourPreservesCategoriesAndMarksOldRowsAsOrdinary() {
         val name = "moneyflow-movement-migration-test"
         helper.createDatabase(name, 3).apply {

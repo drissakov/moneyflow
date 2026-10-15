@@ -45,6 +45,7 @@ class ImportRecoveryCoordinator(private val storage: ImportRecoveryStorage) {
 
 internal fun definitiveImportFailure(status: Int, code: String?): Boolean =
     status in setOf(400, 403, 404, 410, 413, 415, 422) || (status == 409 && code in setOf(
-        "import_duplicate_exact", "import_duplicate_possible", "import_preview_changed", "balance_overflow", "import_not_committed"))
+        "import_duplicate_exact", "import_duplicate_possible", "import_preview_changed", "balance_overflow", "import_not_committed",
+        "archived_account", "archived_category"))
 
 internal fun authoritativeUndoneImport(status: Int, code: String?): Boolean = status == 409 && code == "import_undone"

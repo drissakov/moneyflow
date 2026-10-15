@@ -28,8 +28,8 @@ android {
         applicationId = "com.moneyflow.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -83,6 +83,7 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("androidx.room:room-testing:2.7.2")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
 }

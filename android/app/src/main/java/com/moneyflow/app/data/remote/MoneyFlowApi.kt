@@ -8,6 +8,10 @@ import com.moneyflow.app.data.domain.SupportedCurrency
 import com.moneyflow.app.data.domain.User
 import java.time.Instant
 import java.util.UUID
+import com.google.gson.JsonObject
+import okhttp3.RequestBody
+import retrofit2.http.HTTP
+import retrofit2.http.Url
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -31,6 +35,11 @@ data class AccountDto(
     @SerializedName("opening_balance_minor") val openingBalanceMinor: String,
     @SerializedName("balance_minor") val balanceMinor: String,
     @SerializedName("created_at") val createdAt: String,
+    val type: String? = null,
+    val archived: Boolean? = null,
+    @SerializedName("include_in_balance") val includeInBalance: Boolean? = null,
+    @SerializedName("sort_order") val sortOrder: Int? = null,
+    val version: Long? = null,
 ) {
     fun toDomain(): Account {
         validateUuid(id)
@@ -38,7 +47,8 @@ data class AccountDto(
         SupportedCurrency.fromCode(currency)
         Instant.parse(createdAt)
         return Account(id, name, currency, parseServerMinor(openingBalanceMinor, bounded = true),
-            parseServerMinor(balanceMinor), createdAt)
+            parseServerMinor(balanceMinor), createdAt, (type ?: "card").also { require(it in ACCOUNT_TYPES) },
+            archived ?: false, includeInBalance ?: true, sortOrder ?: 0, (version ?: 1).also { require(it >= 1) })
     }
 }
 
@@ -48,6 +58,7 @@ data class CreateAccountRequest(
     val name: String,
     val currency: String,
     @SerializedName("opening_balance_minor") val openingBalanceMinor: String,
+    val type: String = "card",
 )
 
 data class TransactionDto(
@@ -61,6 +72,12 @@ data class TransactionDto(
     @SerializedName("created_at") val createdAt: String,
     @SerializedName("category_id") val categoryId: String? = null,
     @SerializedName("exclude_from_analytics") val excludeFromAnalytics: Boolean = false,
+    val version: Long? = null,
+    @SerializedName("deleted_at") val deletedAt: String? = null,
+    val source: String? = null,
+    @SerializedName("import_id") val importId: String? = null,
+    @SerializedName("transfer_id") val transferId: String? = null,
+    @SerializedName("transfer_role") val transferRole: String? = null,
 ) {
     fun toDomain(): MoneyTransaction {
         validateUuid(id)
@@ -71,12 +88,20 @@ data class TransactionDto(
         require(note.codePointCount(0, note.length) <= 500)
         Instant.parse(occurredAt)
         Instant.parse(createdAt)
+        deletedAt?.let(Instant::parse)
+        importId?.let(::validateUuid)
+        transferId?.let(::validateUuid)
+        require(source == null || source in setOf("manual", "import", "transfer"))
+        require(transferRole == null || transferRole in setOf("from", "to", "fee"))
+        require((transferId == null) == (transferRole == null))
         return MoneyTransaction(id, accountId, kind, parseServerMinor(amountMinor, positive = true, bounded = true),
-            currency, note, occurredAt, createdAt, categoryId, excludeFromAnalytics)
+            currency, note, occurredAt, createdAt, categoryId, excludeFromAnalytics,
+            (version ?: 1).also { require(it >= 1) }, deletedAt, source ?: "manual", importId, transferId, transferRole)
     }
 }
 
-data class TransactionsResponse(val transactions: List<TransactionDto>)
+data class TransactionsResponse(val transactions: List<TransactionDto>,
+    @SerializedName("next_cursor") val nextCursor: String? = null)
 
 data class CreateTransactionRequest(
     @SerializedName("account_id") val accountId: String,
@@ -100,6 +125,27 @@ data class ErrorBody(val error: ErrorDetail)
 data class ErrorDetail(val code: String, val message: String)
 
 interface MoneyFlowApi {
+    @GET("api/v1/transactions") suspend fun history(
+        @Query("account_id") accountId: String? = null,
+        @Query("limit") limit: Int = 50,
+        @Query("cursor") cursor: String? = null,
+        @Query("q") query: String? = null,
+        @Query("from") from: String? = null,
+        @Query("to") to: String? = null,
+        @Query("category_id") categoryId: String? = null,
+        @Query("kind") kind: String? = null,
+        @Query("include_deleted") includeDeleted: Boolean = false,
+        @Header("Authorization") authorization: String,
+    ): TransactionsResponse
+    @GET("api/v1/transfers/{id}") suspend fun transfer(@Path("id") id: String,
+        @Header("Authorization") authorization: String): TransferDto
+    @PUT suspend fun ledgerPut(@Url path: String, @Body body: RequestBody,
+        @Header("Idempotency-Key") key: String, @Header("Authorization") authorization: String): JsonObject
+    @POST suspend fun ledgerPost(@Url path: String, @Body body: RequestBody,
+        @Header("Idempotency-Key") key: String, @Header("Authorization") authorization: String): JsonObject
+    @HTTP(method = "DELETE", hasBody = true) suspend fun ledgerDelete(@Url path: String, @Body body: RequestBody,
+        @Header("Idempotency-Key") key: String, @Header("Authorization") authorization: String): JsonObject
+
     @POST("api/v1/auth/register") suspend fun register(@Body credentials: Credentials): AuthResponse
     @POST("api/v1/auth/login") suspend fun login(@Body credentials: Credentials): AuthResponse
     @POST("api/v1/auth/logout") suspend fun logout(@Header("Authorization") authorization: String? = null)
@@ -163,3 +209,5 @@ internal fun parseServerMinor(value: String, positive: Boolean = false, bounded:
     if (bounded) require(minor in -Money.MAX_INPUT_MINOR..Money.MAX_INPUT_MINOR)
     return minor
 }
+
+internal val ACCOUNT_TYPES = setOf("card", "cash", "savings", "credit", "other")

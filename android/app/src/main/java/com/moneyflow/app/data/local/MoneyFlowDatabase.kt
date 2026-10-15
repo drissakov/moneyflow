@@ -25,12 +25,18 @@ data class AccountEntity(
     val openingBalanceMinor: Long,
     val balanceMinor: Long,
     val createdAt: String,
+    @ColumnInfo(defaultValue = "'card'") val type: String = "card",
+    @ColumnInfo(defaultValue = "0") val archived: Boolean = false,
+    @ColumnInfo(defaultValue = "1") val includeInBalance: Boolean = true,
+    @ColumnInfo(defaultValue = "0") val sortOrder: Int = 0,
+    @ColumnInfo(defaultValue = "1") val version: Long = 1,
 ) {
-    fun toDomain() = Account(id, name, currency, openingBalanceMinor, balanceMinor, createdAt)
+    fun toDomain() = Account(id, name, currency, openingBalanceMinor, balanceMinor, createdAt, type, archived, includeInBalance, sortOrder, version)
     companion object {
         fun from(userId: String, account: Account) = AccountEntity(
             userId, account.id, account.name, account.currency,
-            account.openingBalanceMinor, account.balanceMinor, account.createdAt,
+            account.openingBalanceMinor, account.balanceMinor, account.createdAt, account.type, account.archived,
+            account.includeInBalance, account.sortOrder, account.version,
         )
     }
 }
@@ -48,12 +54,19 @@ data class TransactionEntity(
     val createdAt: String,
     val categoryId: String? = null,
     @ColumnInfo(defaultValue = "0") val excludeFromAnalytics: Boolean = false,
+    @ColumnInfo(defaultValue = "1") val version: Long = 1,
+    val deletedAt: String? = null,
+    @ColumnInfo(defaultValue = "'manual'") val source: String = "manual",
+    val importId: String? = null,
+    val transferId: String? = null,
+    val transferRole: String? = null,
 ) {
-    fun toDomain() = MoneyTransaction(id, accountId, kind, amountMinor, currency, note, occurredAt, createdAt, categoryId, excludeFromAnalytics)
+    fun toDomain() = MoneyTransaction(id, accountId, kind, amountMinor, currency, note, occurredAt, createdAt, categoryId, excludeFromAnalytics, version, deletedAt, source, importId, transferId, transferRole)
     companion object {
         fun from(userId: String, transaction: MoneyTransaction) = TransactionEntity(
             userId, transaction.id, transaction.accountId, transaction.kind, transaction.amountMinor,
-            transaction.currency, transaction.note, transaction.occurredAt, transaction.createdAt, transaction.categoryId, transaction.excludeFromAnalytics,
+            transaction.currency, transaction.note, transaction.occurredAt, transaction.createdAt, transaction.categoryId, transaction.excludeFromAnalytics, transaction.version, transaction.deletedAt,
+            transaction.source, transaction.importId, transaction.transferId, transaction.transferRole,
         )
     }
 }
@@ -66,11 +79,14 @@ data class CategoryEntity(
     val name: String,
     val parentId: String?,
     val isDefault: Boolean,
+    @ColumnInfo(defaultValue = "0") val archived: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val sortOrder: Int = 0,
+    @ColumnInfo(defaultValue = "1") val version: Long = 1,
 ) {
-    fun toDomain() = Category(id, kind, name, parentId, isDefault)
+    fun toDomain() = Category(id, kind, name, parentId, isDefault, archived, sortOrder, version)
     companion object {
         fun from(userId: String, category: Category) = CategoryEntity(
-            userId, category.id, category.kind, category.name, category.parentId, category.isDefault,
+            userId, category.id, category.kind, category.name, category.parentId, category.isDefault, category.archived, category.sortOrder, category.version,
         )
     }
 }
@@ -86,9 +102,21 @@ data class PortfolioSnapshotEntity(
     val receivedAt: String,
 )
 
+@Entity(tableName = "ledger_snapshots", primaryKeys = ["userId", "filterKey"])
+data class LedgerSnapshotEntity(val userId: String, val filterKey: String, val payload: String, val receivedAt: String)
+
 @Dao
 interface MoneyFlowDao {
-    @Query("SELECT * FROM categories WHERE userId = :userId ORDER BY kind ASC, name COLLATE NOCASE ASC, id ASC")
+    @Query("SELECT * FROM ledger_snapshots WHERE userId = :userId AND filterKey = :filterKey LIMIT 1")
+    suspend fun ledgerSnapshot(userId: String, filterKey: String): LedgerSnapshotEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putLedgerSnapshot(snapshot: LedgerSnapshotEntity)
+    @Query("DELETE FROM ledger_snapshots WHERE userId = :userId")
+    suspend fun deleteLedgerSnapshots(userId: String)
+    @Query("DELETE FROM ledger_snapshots WHERE userId = :userId AND filterKey NOT IN (SELECT filterKey FROM ledger_snapshots WHERE userId = :userId ORDER BY receivedAt DESC LIMIT 20)")
+    suspend fun pruneLedgerSnapshots(userId: String)
+
+    @Query("SELECT * FROM categories WHERE userId = :userId ORDER BY kind ASC, sortOrder ASC, name COLLATE NOCASE ASC, id ASC")
     fun observeCategories(userId: String): Flow<List<CategoryEntity>>
 
     @Query("SELECT * FROM categories WHERE userId = :userId AND id = :categoryId LIMIT 1")
@@ -121,10 +149,10 @@ interface MoneyFlowDao {
     @Query("DELETE FROM fx_preferences WHERE userId = :userId")
     suspend fun deletePreferences(userId: String)
 
-    @Query("SELECT * FROM accounts WHERE userId = :userId ORDER BY createdAt ASC, id ASC")
+    @Query("SELECT * FROM accounts WHERE userId = :userId ORDER BY sortOrder ASC, createdAt ASC, id ASC")
     fun observeAccounts(userId: String): Flow<List<AccountEntity>>
 
-    @Query("SELECT * FROM transactions WHERE userId = :userId AND accountId = :accountId ORDER BY occurredAt DESC, id DESC LIMIT 50")
+    @Query("SELECT * FROM transactions WHERE userId = :userId AND accountId = :accountId AND deletedAt IS NULL ORDER BY occurredAt DESC, id DESC LIMIT 50")
     fun observeTransactions(userId: String, accountId: String): Flow<List<TransactionEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -144,11 +172,30 @@ interface MoneyFlowDao {
 }
 
 @Database(entities = [AccountEntity::class, TransactionEntity::class, FxPreferencesEntity::class,
-    PortfolioSnapshotEntity::class, CategoryEntity::class], version = 4, exportSchema = true)
+    PortfolioSnapshotEntity::class, CategoryEntity::class, LedgerSnapshotEntity::class], version = 5, exportSchema = true)
 abstract class MoneyFlowDatabase : RoomDatabase() {
     abstract fun dao(): MoneyFlowDao
 
     companion object {
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `type` TEXT NOT NULL DEFAULT 'card'")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `archived` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `includeInBalance` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `version` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `categories` ADD COLUMN `archived` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `categories` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `categories` ADD COLUMN `version` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `transactions` ADD COLUMN `version` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `transactions` ADD COLUMN `deletedAt` TEXT")
+                db.execSQL("ALTER TABLE `transactions` ADD COLUMN `source` TEXT NOT NULL DEFAULT 'manual'")
+                db.execSQL("ALTER TABLE `transactions` ADD COLUMN `importId` TEXT")
+                db.execSQL("ALTER TABLE `transactions` ADD COLUMN `transferId` TEXT")
+                db.execSQL("ALTER TABLE `transactions` ADD COLUMN `transferRole` TEXT")
+                db.execSQL("CREATE TABLE IF NOT EXISTS `ledger_snapshots` (`userId` TEXT NOT NULL, `filterKey` TEXT NOT NULL, `payload` TEXT NOT NULL, `receivedAt` TEXT NOT NULL, PRIMARY KEY(`userId`, `filterKey`))")
+            }
+        }
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `fx_preferences` (`userId` TEXT NOT NULL, `baseCurrency` TEXT NOT NULL, `pendingSync` INTEGER NOT NULL, PRIMARY KEY(`userId`))")

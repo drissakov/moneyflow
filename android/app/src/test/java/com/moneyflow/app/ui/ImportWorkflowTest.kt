@@ -59,6 +59,8 @@ class ImportWorkflowTest {
 
     @Test fun `only definitive failures allow new review while ambiguous results stay frozen`() {
         assertTrue(definitiveImportFailure(409, "import_preview_changed"))
+        assertTrue(definitiveImportFailure(409, "archived_account"))
+        assertTrue(definitiveImportFailure(409, "archived_category"))
         assertTrue(definitiveImportFailure(410, "import_expired"))
         assertFalse(definitiveImportFailure(409, "import_already_committed"))
         assertFalse(definitiveImportFailure(409, "idempotency_conflict"))

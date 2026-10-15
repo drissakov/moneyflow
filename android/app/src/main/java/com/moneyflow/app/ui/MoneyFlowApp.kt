@@ -90,50 +90,51 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val app = LocalContext.current.applicationContext as MoneyFlowApplication
     val imports: ImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = ImportViewModel.factory(app, app.repository))
+    val ledger: LedgerViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = LedgerViewModel.Factory(app, app.repository))
     val importState by imports.state.collectAsStateWithLifecycle()
-    val importBlocksWrites = importState.pending != null || importState.recoveryUnavailable || importState.recoveryChecking ||
+    val ledgerState by ledger.state.collectAsStateWithLifecycle()
+    val importBlocksWrites = importState.busy || importState.pending != null || importState.recoveryUnavailable || importState.recoveryChecking ||
         (state.session != null && state.session?.token != importState.session?.token)
-    SideEffect { imports.onMutation(viewModel::onImportedFinancialDataChanged) }
-    var dialog by rememberSaveable { mutableStateOf<String?>(null) }
-    var screen by rememberSaveable { mutableStateOf("overview") }
-    var categoryTransactionId by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(state.session?.user?.id) { dialog = null; screen = "overview"; categoryTransactionId = null }
-
+    val ledgerBlocksWrites = ledgerState.busy || ledgerState.pending != null || ledgerState.recoveryChecking || ledgerState.recoveryUnavailable
+    SideEffect {
+        ledger.setExternalBlocked(importBlocksWrites || state.working || state.categoryWorking)
+        ledger.onMutation { viewModel.refresh() }
+        imports.onMutation { accountId -> viewModel.onImportedFinancialDataChanged(accountId); ledger.refresh() }
+    }
+    var dialog by rememberSaveable(state.session?.token) { mutableStateOf<String?>(null) }
+    var screen by rememberSaveable(state.session?.token) { mutableStateOf("overview") }
+    var ledgerAction by rememberSaveable(state.session?.token) { mutableStateOf<String?>(null) }
+    LaunchedEffect(state.session?.token) { dialog = null; screen = "overview"; ledgerAction = null }
+    LaunchedEffect(state.mutationVersion) { if (state.session != null) ledger.refresh() }
+    androidx.activity.compose.BackHandler(enabled = screen in listOf("categories", "imports")) { screen = "more" }
+    val selectedTab = if (screen in listOf("categories", "imports")) "more" else screen
+    val openLedger: (String?) -> Unit = { action -> ledgerAction = action; screen = "history" }
     Scaffold(
         modifier = Modifier.semantics { testTagsAsResourceId = true },
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            Row(
-                modifier = Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 20.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically) {
                 BrandMark()
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("MoneyFlow", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(
-                        state.session?.user?.email ?: "Личные финансы · каждый день",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Text("moneyflow", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
+                        letterSpacing = (-.6).sp)
+                    Text(if (screen in listOf("categories", "imports")) "Ещё / ${if (screen == "categories") "Категории" else "Импорт"}" else "ЛИЧНАЯ ЭКОНОМИКА",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (state.session != null) {
+                    if (screen in listOf("categories", "imports")) TextButton(onClick = { screen = "more" }) { Text("Назад") }
                     IconButton(onClick = {
                         when (screen) {
                             "analytics" -> viewModel.refreshAnalytics()
-                            "categories" -> viewModel.refreshCategories()
+                            "history", "accounts", "categories" -> ledger.refresh()
                             "imports" -> imports.refreshHistory()
-                            else -> viewModel.refresh()
+                            else -> { viewModel.refresh(); ledger.refresh() }
                         }
-                    }, enabled = !state.refreshing && !state.working && !state.analyticsLoading && !state.categoriesLoading,
+                    }, enabled = !state.refreshing && !state.working && !ledgerState.busy,
                         modifier = Modifier.testTag("refresh")) {
                         Icon(Icons.Default.Refresh, contentDescription = "Обновить данные")
-                    }
-                    IconButton(onClick = { dialog = "logout" }, enabled = !state.working,
-                        modifier = Modifier.testTag("logout")) {
-                        Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Выйти из аккаунта")
                     }
                 }
             }
@@ -143,83 +144,111 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
                 Column {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     NavigationBar(containerColor = MaterialTheme.colorScheme.surface, tonalElevation = 0.dp) {
-                        listOf(Triple("overview", "Обзор", NavigationIcons.Overview),
-                            Triple("analytics", "Аналитика", NavigationIcons.Analytics),
-                            Triple("categories", "Категории", NavigationIcons.Categories),
-                            Triple("imports", "Импорт", NavigationIcons.Imports))
-                            .forEach { (key, label, image) ->
-                                NavigationBarItem(selected = screen == key, onClick = { screen = key },
-                                    icon = { Icon(image, contentDescription = null, modifier = Modifier.size(22.dp)) },
-                                    label = { Text(label, fontWeight = if (screen == key) FontWeight.SemiBold else FontWeight.Medium) },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = MaterialTheme.colorScheme.onPrimary,
-                                        selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                                        indicatorColor = MaterialTheme.colorScheme.primary,
-                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    ), modifier = Modifier.testTag("nav_$key"))
-                            }
+                        listOf(Triple("overview", "Главная", NavigationIcons.Home),
+                            Triple("history", "История", NavigationIcons.History),
+                            Triple("accounts", "Счета", NavigationIcons.Overview),
+                            Triple("analytics", "Отчёты", NavigationIcons.Analytics),
+                            Triple("more", "Ещё", NavigationIcons.More)).forEach { (key, label, image) ->
+                            NavigationBarItem(selected = selectedTab == key, onClick = { screen = key },
+                                icon = { Icon(image, contentDescription = null, modifier = Modifier.size(21.dp)) },
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selectedTab == key) FontWeight.Bold else FontWeight.Medium) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
+                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    indicatorColor = MaterialTheme.colorScheme.primary,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant),
+                                modifier = Modifier.testTag("nav_$key"))
+                        }
                     }
-                    }
-            }
-        },
-        floatingActionButton = {
-            if (state.session != null && screen == "overview" && state.selectedAccount != null && state.pending == null && !importBlocksWrites) {
-                ExtendedFloatingActionButton(
-                    onClick = { if (!state.working) { viewModel.clearMessages(); dialog = "transaction" } },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text("Добавить операцию") },
-                    shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.testTag("add_transaction"),
-                )
+                }
             }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+            androidx.compose.runtime.key(state.session?.token) {
             when {
                 state.starting -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 state.session == null -> AuthScreen(state, viewModel)
+                screen in listOf("history", "accounts", "categories") && ledgerState.session?.token != state.session?.token ->
+                    CircularProgressIndicator(Modifier.align(Alignment.Center))
+                screen == "imports" && importState.session?.token != state.session?.token ->
+                    CircularProgressIndicator(Modifier.align(Alignment.Center))
+                screen == "history" -> LedgerScreen(ledgerState, ledger, ledgerAction) { ledgerAction = null }
+                screen == "accounts" -> AccountsManagementScreen(ledgerState, ledger)
                 screen == "analytics" -> AnalyticsScreen(state, viewModel)
-                screen == "categories" -> CategoriesScreen(state, viewModel)
-                screen == "imports" -> ImportsScreen(importState, imports, state.pending != null)
+                screen == "categories" -> CategoriesManagementScreen(ledgerState, ledger)
+                screen == "imports" -> ImportsScreen(importState, imports, state.pending != null || ledgerBlocksWrites)
+                screen == "more" -> MoreScreen(state, onCategories = { screen = "categories" },
+                    onImports = { screen = "imports" }, onLogout = { dialog = "logout" }, canLogout = !state.working && !ledgerState.busy && !importState.busy)
                 else -> Dashboard(state, viewModel,
-                    onAddAccount = { if (importBlocksWrites) screen = "imports" else { viewModel.clearMessages(); dialog = "account" } },
+                    onAddAccount = { screen = "accounts" },
                     onConverter = { viewModel.clearConversion(); dialog = "convert" },
-                    onTransactionCategory = { transaction ->
-                        viewModel.clearMessages(); viewModel.clearCategoryMessages()
-                        categoryTransactionId = transaction.id; dialog = "assign_category"
-                    })
+                    onNewTransaction = { openLedger("create") },
+                    onTransfer = { openLedger("transfer") },
+                    onHistory = { openLedger(null) },
+                    writesAllowed = state.pending == null && !importBlocksWrites && !ledgerBlocksWrites)
+            }
             }
         }
     }
-
     when (dialog) {
-        "account" -> AccountDialog(state, viewModel) { dialog = null }
-        "transaction" -> state.selectedAccount?.let { account -> TransactionDialog(account, state, viewModel) { dialog = null } }
-        "assign_category" -> state.transactions.firstOrNull { it.id == categoryTransactionId }?.let { transaction ->
-            AssignCategoryDialog(transaction, state, viewModel) { dialog = null; categoryTransactionId = null }
-        }
         "convert" -> ConverterDialog(state, viewModel) { dialog = null }
-        "logout" -> AlertDialog(
-            onDismissRequest = { dialog = null },
+        "logout" -> AlertDialog(onDismissRequest = { dialog = null },
             title = { Text("Выйти из аккаунта?") },
-            text = { Text("Локальная сессия и кэш финансовых данных будут удалены. Данные на сервере останутся в аккаунте." +
-                if (state.pending != null) " Неподтверждённая операция сохранится в зашифрованном виде: войдите в этот аккаунт снова, чтобы подтвердить её." else "") },
+            text = { Text("Данные на сервере сохранятся. Неподтверждённые изменения останутся в зашифрованном виде на этом устройстве — для их проверки войдите в тот же аккаунт.") },
             confirmButton = { TextButton(onClick = { dialog = null; viewModel.logout() }) { Text("Выйти") } },
-            dismissButton = { TextButton(onClick = { dialog = null }) { Text("Отмена") } },
-        )
+            dismissButton = { TextButton(onClick = { dialog = null }) { Text("Отмена") } })
     }
 }
 
 @Composable
 private fun BrandMark() {
-    Box(
-        Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primary),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text("M", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp)
+    androidx.compose.foundation.Canvas(Modifier.size(34.dp)) {
+        val unit = size.width / 7f
+        drawRect(androidx.compose.ui.graphics.Color.Black, size = size)
+        drawLine(androidx.compose.ui.graphics.Color.White, androidx.compose.ui.geometry.Offset(unit * 1.5f, unit * 5.2f),
+            androidx.compose.ui.geometry.Offset(unit * 1.5f, unit * 1.8f), unit * .6f)
+        drawLine(androidx.compose.ui.graphics.Color.White, androidx.compose.ui.geometry.Offset(unit * 1.5f, unit * 1.8f),
+            androidx.compose.ui.geometry.Offset(unit * 3.5f, unit * 4.1f), unit * .6f)
+        drawLine(androidx.compose.ui.graphics.Color.White, androidx.compose.ui.geometry.Offset(unit * 3.5f, unit * 4.1f),
+            androidx.compose.ui.geometry.Offset(unit * 5.5f, unit * 1.8f), unit * .6f)
+        drawLine(androidx.compose.ui.graphics.Color.White, androidx.compose.ui.geometry.Offset(unit * 5.5f, unit * 1.8f),
+            androidx.compose.ui.geometry.Offset(unit * 5.5f, unit * 5.2f), unit * .6f)
+    }
+}
+
+@Composable
+private fun MoreScreen(state: MoneyFlowUiState, onCategories: () -> Unit, onImports: () -> Unit,
+    onLogout: () -> Unit, canLogout: Boolean) {
+    LazyColumn(Modifier.widthIn(max = 680.dp).fillMaxSize().testTag("more_screen"),
+        contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        item { P0Heading("05", "Всё остальное.", "Инструменты, которые приводят финансы в порядок.") }
+        item { MoreTile("01", "Категории", "Свои категории, подкатегории и объединение записей", "nav_categories", onCategories) }
+        item { MoreTile("02", "Импорт выписки", "PDF Kaspi и Halyk · предпросмотр и отмена импорта", "nav_imports", onImports) }
+        item { HorizontalDivider() }
+        item { Text(state.session?.user?.email.orEmpty(), style = MaterialTheme.typography.bodyMedium) }
+        item { TextButton(onClick = onLogout, enabled = canLogout, modifier = Modifier.testTag("logout")) {
+            Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null); Spacer(Modifier.width(8.dp)); Text("Выйти из аккаунта")
+        } }
+        item { Text("MoneyFlow ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+}
+
+@Composable
+private fun MoreTile(number: String, title: String, description: String, tag: String, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = P0Shape, color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth().testTag(tag)) {
+        Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(number, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("↗", style = MaterialTheme.typography.headlineSmall)
+            }
+            Text(title, style = MaterialTheme.typography.headlineSmall)
+            Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -282,12 +311,16 @@ private fun Dashboard(
     viewModel: MoneyFlowViewModel,
     onAddAccount: () -> Unit,
     onConverter: () -> Unit,
-    onTransactionCategory: (MoneyTransaction) -> Unit,
+    onNewTransaction: () -> Unit,
+    onTransfer: () -> Unit,
+    onHistory: () -> Unit,
+    writesAllowed: Boolean,
 ) {
+    val activeAccounts = state.accounts.filterNot { it.archived }
     LazyColumn(
         modifier = Modifier.widthIn(max = 620.dp).fillMaxSize().testTag("dashboard"),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 104.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
     ) {
         if (state.refreshing || state.working) item {
             LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
@@ -295,30 +328,53 @@ private fun Dashboard(
         state.error?.let { error -> item { MessageCard(error, true, viewModel::clearMessages) } }
         state.notice?.let { notice -> item { MessageCard(notice, false, viewModel::clearMessages) } }
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Мои финансы", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                Text("Все счета — в одном балансе.", style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            P0Heading("01", "Деньги в фокусе.", java.time.LocalDate.now().format(
+                DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("ru"))))
         }
         item { PortfolioCard(state, viewModel, onConverter) }
         item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(onClick = onNewTransaction, enabled = writesAllowed && state.accounts.any { !it.archived },
+                    shape = P0Shape, color = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.fillMaxWidth().testTag("add_transaction")) {
+                    Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Записать операцию", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text("+", style = MaterialTheme.typography.headlineMedium)
+                    }
+                }
+                Surface(onClick = onTransfer, enabled = writesAllowed && state.accounts.count { !it.archived } >= 2,
+                    shape = P0Shape, color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth().testTag("add_transfer")) {
+                    Row(Modifier.fillMaxWidth().padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Между своими счетами", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Text("⇄", style = MaterialTheme.typography.headlineMedium)
+                    }
+                }
+                if (!writesAllowed && state.pending == null) Text("Есть неподтверждённое изменение. Откройте историю или импорт, чтобы завершить его.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        item {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Счета", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                    Text("Мои счета", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f))
                     TextButton(onClick = onAddAccount, enabled = !state.working, modifier = Modifier.testTag("add_account")) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("Новый счёт")
+                        Text("Управление")
                     }
                 }
-                if (state.accounts.isEmpty()) {
-                    EmptyCard("Начните с первого счёта", "Например, «Основная карта» или «Наличные». Выберите валюту и начальный остаток.")
+                if (activeAccounts.isEmpty()) {
+                    if (state.accounts.isEmpty()) EmptyCard("Начните с первого счёта", "Например, «Основная карта» или «Наличные». Выберите валюту и начальный остаток.")
+                    else EmptyCard("Все счета в архиве", "Верните счёт из архива или создайте новый во вкладке «Счета». История сохранена.")
                 } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    state.accounts.forEach { account ->
+                    activeAccounts.take(3).forEach { account ->
                         FxAccountCard(account, state) { viewModel.selectAccount(account.id) }
                     }
+                    if (activeAccounts.size > 3) Text("Ещё ${activeAccounts.size - 3} — во вкладке «Счета»",
+                        style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -338,19 +394,22 @@ private fun Dashboard(
             }
         } }
         if (state.selectedAccount != null) {
-            item { BalanceCard(state.selectedAccount, state.lastSyncedAt, state.refreshing) }
             item {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Последние операции", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("До 50 записей по выбранному счёту", style = MaterialTheme.typography.labelSmall,
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    HorizontalDivider()
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Последнее", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                        TextButton(onClick = onHistory, modifier = Modifier.testTag("open_history")) { Text("Вся история ↗") }
+                    }
+                    Text(state.selectedAccount?.name.orEmpty(), style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             if (state.transactions.isEmpty()) item {
                 EmptyCard("Здесь появятся ваши записи", "Добавьте первый расход или доход. Баланс обновится после сохранения на сервере.")
             }
-            items(state.transactions, key = { it.id }) { transaction ->
-                TransactionRow(transaction, state, onSelectCategory = { onTransactionCategory(transaction) })
+            items(state.transactions.take(5), key = { it.id }) { transaction ->
+                TransactionRow(transaction, state, onSelectCategory = onHistory)
             }
         }
     }

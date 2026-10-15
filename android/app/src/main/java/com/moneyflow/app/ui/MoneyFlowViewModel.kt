@@ -130,8 +130,8 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
                     refreshAnalytics()
                     launch {
                         repository.observeAccounts(session.user.id).collect { accounts ->
-                            val next = selected.value?.takeIf { id -> accounts.any { it.id == id } }
-                                ?: accounts.firstOrNull()?.id
+                            val next = selected.value?.takeIf { id -> accounts.any { it.id == id && !it.archived } }
+                                ?: accounts.firstOrNull { !it.archived }?.id
                             _state.update { it.copy(accounts = accounts, selectedAccountId = next, accountsLoaded = true) }
                             accountSource.value = accounts
                             selected.value = next
@@ -152,7 +152,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
                     launch { fxRequest(session.token) { repository.refreshPreferences() } }
                     launch { fxRequest(session.token) { repository.refreshCurrencies() } }
                     launch {
-                        refreshRequest {
+                        refreshRequest(session) {
                             val user = repository.verifySession()
                             require(user.id == session.user.id) { "Пользователь сессии изменился. Войдите снова" }
                             refreshAccounts()
@@ -171,7 +171,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
                                 _state.update { it.copy(transactions = transactions) }
                             }
                         }
-                        launch { refreshRequest { repository.refreshTransactions(accountId) } }
+                        launch { refreshRequest(session) { repository.refreshTransactions(accountId) } }
                     }
                 }
         }
@@ -218,10 +218,11 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
     }
 
     fun refresh() {
+        val session = repository.session.value ?: return
         if (state.value.refreshing) return
         _state.update { it.copy(error = null, notice = null) }
         viewModelScope.launch {
-            refreshRequest {
+            refreshRequest(session) {
                 refreshAccounts()
                 selected.value?.let { repository.refreshTransactions(it) }
             }
@@ -282,8 +283,9 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
     }
 
     private fun refreshAfterWrite() {
+        val session = repository.session.value ?: return
         viewModelScope.launch {
-            refreshRequest {
+            refreshRequest(session) {
                 refreshAccounts()
                 selected.value?.let { repository.refreshTransactions(it) }
             }
@@ -322,7 +324,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
                 throw error
             } catch (error: Exception) {
                 if (repository.session.value?.token == session.token) {
-                    if (error is HttpException && error.code() == 401) handleError(error)
+                    if (error is HttpException && error.code() == 401) handleError(error, session)
                     else _state.update { it.copy(categoryError = categoryMessage(error)) }
                 }
             } finally {
@@ -384,7 +386,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
                 throw error
             } catch (error: Exception) {
                 if (generation == analyticsGeneration && repository.session.value?.token == session.token) {
-                    if (error is HttpException && error.code() == 401) handleError(error)
+                    if (error is HttpException && error.code() == 401) handleError(error, session)
                     else _state.update { it.copy(analyticsError = analyticsMessage(error)) }
                 }
             } finally {
@@ -396,7 +398,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
     }
 
     private suspend fun categoriesRequest(token: String, block: suspend () -> Unit) {
-        if (repository.session.value?.token != token) return
+        val session = repository.session.value?.takeIf { it.token == token } ?: return
         _state.update { it.copy(categoriesLoading = true, categoryError = null) }
         try {
             block()
@@ -404,7 +406,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
             throw error
         } catch (error: Exception) {
             if (repository.session.value?.token == token) {
-                if (error is HttpException && error.code() == 401) handleError(error)
+                if (error is HttpException && error.code() == 401) handleError(error, session)
                 else _state.update { it.copy(categoryError = categoryMessage(error)) }
             }
         } finally {
@@ -474,7 +476,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
                 throw error
             } catch (error: Exception) {
                 if (repository.session.value?.token == session.token && generation == conversionGeneration) {
-                    if (error is HttpException && error.code() == 401) handleError(error)
+                    if (error is HttpException && error.code() == 401) handleError(error, session)
                     else _state.update { it.copy(conversionError = fxMessage(error)) }
                 }
             } finally {
@@ -491,6 +493,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
     }
 
     private suspend fun fxRequest(token: String, block: suspend () -> Unit) {
+        val session = repository.session.value?.takeIf { it.token == token } ?: return
         _state.update { it.copy(fxRefreshRequests = it.fxRefreshRequests + 1) }
         try {
             block()
@@ -498,7 +501,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
             throw error
         } catch (error: Exception) {
             if (repository.session.value?.token == token) {
-                if (error is HttpException && error.code() == 401) handleError(error)
+                if (error is HttpException && error.code() == 401) handleError(error, session)
                 else _state.update { it.copy(fxError = fxMessage(error)) }
             }
         } finally {
@@ -529,7 +532,7 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                if (repository.session.value?.token == actionSession?.token) handleError(error)
+                if (repository.session.value?.token == actionSession?.token) handleError(error, actionSession)
             } finally {
                 if (actionSession == null || repository.session.value?.token == actionSession.token) {
                     _state.update { it.copy(working = false) }
@@ -538,14 +541,15 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
         }
     }
 
-    private suspend fun refreshRequest(block: suspend () -> Unit) {
+    private suspend fun refreshRequest(session: Session, block: suspend () -> Unit) {
+        if (repository.session.value?.token != session.token) return
         _state.update { it.copy(refreshRequests = it.refreshRequests + 1) }
         try {
             block()
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            handleError(error)
+            if (repository.session.value?.token == session.token) handleError(error, session)
         } finally {
             _state.update { it.copy(refreshRequests = (it.refreshRequests - 1).coerceAtLeast(0)) }
         }
@@ -559,11 +563,13 @@ class MoneyFlowViewModel(private val repository: MoneyFlowRepository) : ViewMode
         }
     }
 
-    private suspend fun handleError(error: Exception) {
-        if (error is HttpException && error.code() == 401 && repository.session.value != null) {
+    private suspend fun handleError(error: Exception, expectedSession: Session?) {
+        val current = repository.session.value
+        if (current?.token != expectedSession?.token || current?.user?.id != expectedSession?.user?.id) return
+        if (error is HttpException && error.code() == 401 && expectedSession != null) {
             withContext(NonCancellable) {
-                repository.expireSession()
-                _state.update { it.copy(error = "Сессия завершилась. Войдите снова") }
+                repository.expireSession(expectedSession)
+                if (repository.session.value == null) _state.update { it.copy(error = "Сессия завершилась. Войдите снова") }
             }
             return
         }

@@ -98,7 +98,7 @@ internal fun CategorySelector(
         }
     }
     if (expanded && enabled) CategoryPickerSheet(
-        categories = categories, kind = kind, selectedId = selectedId, rootsOnly = rootsOnly,
+        categories = categories.filter { !it.archived }, kind = kind, selectedId = selectedId, rootsOnly = rootsOnly,
         label = label, tagPrefix = tagPrefix, onDismiss = { expanded = false },
         onSelect = { expanded = false; onSelect(it) },
         onCreate = onCreate?.let { create -> { expanded = false; create() } },
