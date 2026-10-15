@@ -104,7 +104,6 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel) {
     var dialog by rememberSaveable(state.session?.token) { mutableStateOf<String?>(null) }
     var screen by rememberSaveable(state.session?.token) { mutableStateOf("overview") }
     var ledgerAction by rememberSaveable(state.session?.token) { mutableStateOf<String?>(null) }
-    LaunchedEffect(state.session?.token) { dialog = null; screen = "overview"; ledgerAction = null }
     LaunchedEffect(state.mutationVersion) { if (state.session != null) ledger.refresh() }
     androidx.activity.compose.BackHandler(enabled = screen in listOf("categories", "imports")) { screen = "more" }
     val selectedTab = if (screen in listOf("categories", "imports")) "more" else screen

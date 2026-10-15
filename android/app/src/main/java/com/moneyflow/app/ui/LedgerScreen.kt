@@ -34,17 +34,26 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
     initialAction: String? = null, onActionConsumed: () -> Unit = {}) {
     var editor by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
+    var transferId by rememberSaveable { mutableStateOf<String?>(null) }
     var transfer by remember { mutableStateOf<MoneyTransfer?>(null) }
     var query by rememberSaveable { mutableStateOf(state.filter.query) }
     val currentFilter by rememberUpdatedState(state.filter)
-    val initialRevision = remember { state.revision }
+    val initialRevision = rememberSaveable(editor, selectedId, transferId) { state.revision }
     val activeAccounts = state.accounts.filterNot { it.archived }
-    LaunchedEffect(state.session?.user?.id) { editor = null; selectedId = null; transfer = null; query = state.filter.query }
+    P0ResetOnUserChange(state.session?.user?.id) { editor = null; selectedId = null; transfer = null; transferId = null; query = state.filter.query }
     LaunchedEffect(state.revision) {
-        if (state.revision != initialRevision && editor != "filters") { editor = null; selectedId = null; transfer = null }
+        if (state.revision != initialRevision && editor != "filters") { editor = null; selectedId = null; transfer = null; transferId = null }
+    }
+    LaunchedEffect(transferId, editor, state.busy) {
+        val id = transferId
+        if (editor == "transfer" && id != null && transfer?.id != id && !state.busy && state.error == null)
+            viewModel.fetchTransfer(id) { transfer = it }
     }
     LaunchedEffect(initialAction) {
-        if (initialAction != null) { viewModel.clearMessage(); editor = initialAction; onActionConsumed() }
+        if (initialAction != null) {
+            viewModel.clearMessage(); selectedId = null; transferId = null; transfer = null
+            editor = initialAction; onActionConsumed()
+        }
     }
     LaunchedEffect(query) {
         delay(350)
@@ -60,7 +69,7 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
                     shape = P0Shape, contentPadding = PaddingValues(16.dp), modifier = Modifier.testTag("ledger_add")) {
                     Icon(Icons.Default.Add, null, Modifier.size(18.dp)); Text(" Операция")
                 }
-                OutlinedButton(onClick = { viewModel.clearMessage(); transfer = null; editor = "transfer" },
+                OutlinedButton(onClick = { viewModel.clearMessage(); transfer = null; transferId = null; editor = "transfer" },
                     enabled = state.canWrite && activeAccounts.size >= 2, shape = P0Shape,
                     contentPadding = PaddingValues(16.dp), modifier = Modifier.testTag("ledger_transfer")) { Text("↔  Перевод") }
             }
@@ -123,7 +132,7 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
             items(transactions, key = { it.id }) { transaction ->
                 LedgerRow(transaction, state, enabled = !state.busy) {
                     viewModel.clearMessage()
-                    if (transaction.transferId != null) viewModel.fetchTransfer(transaction.transferId) { loaded -> transfer = loaded; editor = "transfer" }
+                    if (transaction.transferId != null) viewModel.fetchTransfer(transaction.transferId) { loaded -> transfer = loaded; transferId = loaded.id; editor = "transfer" }
                     else { selectedId = transaction.id; editor = "edit" }
                 }
             }
@@ -142,7 +151,14 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
     when (editor) {
         "create" -> P0TransactionEditor(state, viewModel, null, state.filter.accountId) { editor = null }
         "edit" -> state.transactions.firstOrNull { it.id == selectedId }?.let { tx -> P0TransactionEditor(state, viewModel, tx) { editor = null; selectedId = null } }
-        "transfer" -> P0TransferEditor(state, viewModel, transfer) { editor = null; transfer = null }
+        "transfer" -> if (transferId == null || transfer?.id == transferId)
+            P0TransferEditor(state, viewModel, transfer) { editor = null; transfer = null; transferId = null }
+        else P0Sheet("ledger_transfer_loading", "Открываем перевод.", "История / перевод", state.busy,
+            { editor = null; transferId = null }) {
+            if (state.busy) CircularProgressIndicator(Modifier.size(24.dp))
+            state.error?.let { P0Message(it) }
+            OutlinedButton(onClick = { transferId?.let { id -> viewModel.fetchTransfer(id) { transfer = it } } }, enabled = !state.busy) { Text("Повторить загрузку") }
+        }
         "filters" -> P0LedgerFilters(state, viewModel) { editor = null }
     }
 }

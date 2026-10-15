@@ -20,6 +20,7 @@ import java.time.Instant
 @Composable
 internal fun P0TransactionEditor(state: LedgerUiState, viewModel: LedgerViewModel, original: MoneyTransaction?,
     initialAccountId: String? = null, onDismiss: () -> Unit) {
+    val baseVersion = rememberSaveable(original?.id) { original?.version ?: 1L }
     val stamp = remember { original?.occurredAt ?: Instant.now().toString() }
     var accountId by rememberSaveable(original?.id) { mutableStateOf(original?.accountId ?: initialAccountId ?: state.accounts.firstOrNull { !it.archived }?.id.orEmpty()) }
     var kind by rememberSaveable(original?.id) { mutableStateOf(original?.kind ?: "expense") }
@@ -32,7 +33,7 @@ internal fun P0TransactionEditor(state: LedgerUiState, viewModel: LedgerViewMode
     var localError by remember { mutableStateOf<String?>(null) }
     var choosingAccount by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<String?>(null) }
-    val revision = remember { state.revision }
+    val revision = rememberSaveable(original?.id) { state.revision }
     LaunchedEffect(state.revision) { if (state.revision != revision) onDismiss() }
     val account = state.accounts.firstOrNull { it.id == accountId }
     val deleted = original?.deletedAt != null
@@ -44,7 +45,8 @@ internal fun P0TransactionEditor(state: LedgerUiState, viewModel: LedgerViewMode
             else "Остаток счёта и отчёты будут пересчитаны. Операцию можно вернуть: включите «Показывать удалённые» в фильтрах истории.",
             if (restoring) "Восстановить" else "Удалить операцию", "ledger_transaction_${if (restoring) "restore" else "delete"}",
             state, viewModel, { confirm = null }) {
-            if (restoring) viewModel.restoreTransaction(original) else viewModel.deleteTransaction(original)
+            val snapshot = original.copy(version = baseVersion)
+            if (restoring) viewModel.restoreTransaction(snapshot) else viewModel.deleteTransaction(snapshot)
         }
         return
     }
@@ -90,7 +92,7 @@ internal fun P0TransactionEditor(state: LedgerUiState, viewModel: LedgerViewMode
                 val minor = Money.parseMinor(amount, SupportedCurrency.fromCode(selected.currency), positive = true)
                 val occurred = p0Instant(date, time)
                 if (original == null) viewModel.createTransaction(accountId, kind, minor, note.trim(), occurred, categoryId)
-                else viewModel.updateTransaction(original, accountId, kind, minor, note.trim(), occurred, categoryId, excluded)
+                else viewModel.updateTransaction(original.copy(version = baseVersion), accountId, kind, minor, note.trim(), occurred, categoryId, excluded)
             }.onFailure { localError = it.message ?: "Проверьте данные" }
         }
         if (original != null) OutlinedButton(onClick = { viewModel.clearMessage(); confirm = if (deleted) "restore" else "delete" },
@@ -106,6 +108,7 @@ internal fun P0TransactionEditor(state: LedgerUiState, viewModel: LedgerViewMode
 
 @Composable
 internal fun P0TransferEditor(state: LedgerUiState, viewModel: LedgerViewModel, original: MoneyTransfer?, onDismiss: () -> Unit) {
+    val baseVersion = rememberSaveable(original?.id) { original?.version ?: 1L }
     val active = state.accounts.filterNot { it.archived }
     val stamp = remember { original?.occurredAt ?: Instant.now().toString() }
     var fromId by rememberSaveable(original?.id) { mutableStateOf(original?.fromAccountId ?: active.firstOrNull()?.id.orEmpty()) }
@@ -121,7 +124,7 @@ internal fun P0TransferEditor(state: LedgerUiState, viewModel: LedgerViewModel, 
     var picker by remember { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<String?>(null) }
     var localError by remember { mutableStateOf<String?>(null) }
-    val revision = remember { state.revision }
+    val revision = rememberSaveable(original?.id) { state.revision }
     LaunchedEffect(state.revision) { if (state.revision != revision) onDismiss() }
     val from = state.accounts.firstOrNull { it.id == fromId }
     val to = state.accounts.firstOrNull { it.id == toId }
@@ -137,7 +140,8 @@ internal fun P0TransferEditor(state: LedgerUiState, viewModel: LedgerViewModel, 
             else "Списание, зачисление и комиссия будут удалены вместе. Остатки счетов пересчитаются. Перевод можно восстановить через фильтр удалённых операций.",
             if (restoring) "Восстановить перевод" else "Удалить перевод", "ledger_transfer_${if (restoring) "restore" else "delete"}",
             state, viewModel, { confirm = null }) {
-            if (restoring) viewModel.restoreTransfer(original) else viewModel.deleteTransfer(original)
+            val snapshot = original.copy(version = baseVersion)
+            if (restoring) viewModel.restoreTransfer(snapshot) else viewModel.deleteTransfer(snapshot)
         }
         return
     }
@@ -189,7 +193,7 @@ internal fun P0TransferEditor(state: LedgerUiState, viewModel: LedgerViewModel, 
                 val sourceMinor = Money.parseMinor(fromAmount, SupportedCurrency.fromCode(source.currency), positive = true)
                 val destinationMinor = if (sameCurrency) sourceMinor else Money.parseMinor(toAmount, SupportedCurrency.fromCode(destination.currency), positive = true)
                 val feeMinor = if (hasFee) Money.parseMinor(fee, SupportedCurrency.fromCode(requireNotNull(feeAccount) { "Выберите счёт комиссии" }.currency), positive = true) else 0L
-                viewModel.saveTransfer(original, fromId, toId, sourceMinor, destinationMinor, feeMinor,
+                viewModel.saveTransfer(original?.copy(version = baseVersion), fromId, toId, sourceMinor, destinationMinor, feeMinor,
                     if (hasFee) feeAccountId else null, note.trim(), p0Instant(date, time))
             }.onFailure { localError = it.message ?: "Проверьте перевод" }
         }

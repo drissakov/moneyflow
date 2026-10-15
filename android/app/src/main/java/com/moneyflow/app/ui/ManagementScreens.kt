@@ -32,7 +32,7 @@ internal fun AccountsManagementScreen(state: LedgerUiState, viewModel: LedgerVie
     var editing by rememberSaveable { mutableStateOf(false) }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     val accounts = state.accounts.filter { showArchived || !it.archived }.sortedWith(compareBy<Account> { it.sortOrder }.thenBy { it.createdAt }.thenBy { it.id })
-    LaunchedEffect(state.session?.user?.id) { editing = false; selectedId = null }
+    P0ResetOnUserChange(state.session?.user?.id) { editing = false; selectedId = null }
     LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize().testTag("accounts_management_screen"),
         contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 36.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { P0Heading("03", "Мои деньги.\nМои счета.", "Карты, наличные и накопления — со своим местом в общей картине.") }
@@ -93,6 +93,7 @@ private fun P0ManagementStatus(state: LedgerUiState, viewModel: LedgerViewModel)
 
 @Composable
 internal fun P0AccountEditor(state: LedgerUiState, viewModel: LedgerViewModel, original: Account?, onDismiss: () -> Unit) {
+    val baseVersion = rememberSaveable(original?.id) { original?.version ?: 1L }
     var name by rememberSaveable(original?.id) { mutableStateOf(original?.name.orEmpty()) }
     var currency by rememberSaveable(original?.id) { mutableStateOf(original?.currency ?: "KZT") }
     var type by rememberSaveable(original?.id) { mutableStateOf(original?.type ?: "card") }
@@ -102,14 +103,14 @@ internal fun P0AccountEditor(state: LedgerUiState, viewModel: LedgerViewModel, o
     var picker by remember { mutableStateOf<String?>(null) }
     var archiveConfirm by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val revision = remember { state.revision }
+    val revision = rememberSaveable(original?.id) { state.revision }
     LaunchedEffect(state.revision) { if (state.revision != revision) onDismiss() }
     if (archiveConfirm && original != null) {
         P0Confirmation(if (original.archived) "Вернуть счёт?" else "Убрать счёт в архив?",
             if (original.archived) "Счёт снова станет доступен для операций и переводов. Его история сохранена."
             else "История и настройка «В общем балансе» сохранятся. Новые операции недоступны до восстановления. Счёт можно вернуть из архива в любой момент.",
             if (original.archived) "Вернуть счёт" else "В архив", "account_archive", state, viewModel, { archiveConfirm = false }) {
-            viewModel.saveAccount(original, original.name, original.type, original.openingBalanceMinor,
+            viewModel.saveAccount(original.copy(version = baseVersion), original.name, original.type, original.openingBalanceMinor,
                 !original.archived, original.includeInBalance, original.sortOrder)
         }
         return
@@ -149,7 +150,7 @@ internal fun P0AccountEditor(state: LedgerUiState, viewModel: LedgerViewModel, o
             runCatching {
                 val minor = Money.parseMinor(opening, SupportedCurrency.fromCode(currency))
                 if (original == null) viewModel.createAccount(name.trim(), currency, minor, type)
-                else viewModel.saveAccount(original, name.trim(), type, minor, original.archived, include,
+                else viewModel.saveAccount(original.copy(version = baseVersion), name.trim(), type, minor, original.archived, include,
                     order.toIntOrNull() ?: throw IllegalArgumentException("Порядок должен быть целым числом"))
             }.onFailure { error = it.message ?: "Проверьте данные счёта" }
         }
@@ -176,7 +177,7 @@ internal fun CategoriesManagementScreen(state: LedgerUiState, viewModel: LedgerV
     var parentId by rememberSaveable { mutableStateOf<String?>(null) }
     val roots = state.categories.filter { it.kind == kind && it.parentId == null && (archived || !it.archived) }
         .sortedWith(compareBy<Category> { it.sortOrder }.thenBy { it.name })
-    LaunchedEffect(state.session?.user?.id) { editing = false; selectedId = null; parentId = null }
+    P0ResetOnUserChange(state.session?.user?.id) { editing = false; selectedId = null; parentId = null }
     LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize().testTag("categories_management_screen"),
         contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 36.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { P0Heading("05", "У всего\nесть своё место.", "Своя система категорий. Без лишних рамок.") }
@@ -231,6 +232,7 @@ private fun P0CategoryManageRow(category: Category, child: Boolean, enabled: Boo
 @Composable
 internal fun P0CategoryEditor(state: LedgerUiState, viewModel: LedgerViewModel, original: Category?, kind: String,
     initialParentId: String? = null, onDismiss: () -> Unit) {
+    val baseVersion = rememberSaveable(original?.id) { original?.version ?: 1L }
     var name by rememberSaveable(original?.id, initialParentId) { mutableStateOf(original?.name.orEmpty()) }
     var parentId by rememberSaveable(original?.id, initialParentId) { mutableStateOf(original?.parentId ?: initialParentId) }
     var order by rememberSaveable(original?.id) { mutableStateOf((original?.sortOrder ?: 0).toString()) }
@@ -238,17 +240,17 @@ internal fun P0CategoryEditor(state: LedgerUiState, viewModel: LedgerViewModel, 
     var archiveConfirm by remember { mutableStateOf(false) }
     var merging by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val revision = remember { state.revision }
+    val revision = rememberSaveable(original?.id) { state.revision }
     val archivedParent = state.categories.firstOrNull { it.id == original?.parentId && it.archived }
     LaunchedEffect(state.revision) { if (state.revision != revision) onDismiss() }
-    if (merging && original != null) { P0CategoryMerge(state, viewModel, original) { merging = false }; return }
+    if (merging && original != null) { P0CategoryMerge(state, viewModel, original.copy(version = baseVersion)) { merging = false }; return }
     if (archiveConfirm && original != null) {
         val hasChildren = state.categories.any { it.parentId == original.id }
         P0Confirmation(if (original.archived) "Вернуть категорию?" else "Архивировать категорию?",
             if (original.archived) "Категория снова станет доступна при добавлении операций. История сохранена."
             else "Название останется в истории и отчётах. Категория${if (hasChildren) " и её подкатегории" else ""} станет недоступна для новых операций. Позже её можно вернуть из архива.",
             if (original.archived) "Вернуть категорию" else "В архив", "category_archive", state, viewModel, { archiveConfirm = false }) {
-            viewModel.saveCategory(original, original.name, !original.archived, original.sortOrder)
+            viewModel.saveCategory(original.copy(version = baseVersion), original.name, !original.archived, original.sortOrder)
         }; return
     }
     P0Sheet("category_management_editor", if (original == null) { if (parentId == null) "Новая категория." else "Точнее о тратах." } else "Своя система.",
@@ -274,7 +276,7 @@ internal fun P0CategoryEditor(state: LedgerUiState, viewModel: LedgerViewModel, 
             state.canWrite && name.trim().isNotEmpty()) {
             runCatching {
                 if (original == null) viewModel.createCategory(kind, name.trim(), if (kind == "expense") parentId else null)
-                else viewModel.saveCategory(original, name.trim(), original.archived,
+                else viewModel.saveCategory(original.copy(version = baseVersion), name.trim(), original.archived,
                     order.toIntOrNull() ?: throw IllegalArgumentException("Порядок должен быть целым числом"))
             }.onFailure { error = it.message ?: "Проверьте данные категории" }
         }
@@ -294,6 +296,7 @@ internal fun P0CategoryEditor(state: LedgerUiState, viewModel: LedgerViewModel, 
 
 @Composable
 private fun P0CategoryMerge(state: LedgerUiState, viewModel: LedgerViewModel, source: Category, onDismiss: () -> Unit) {
+    val baseVersion = rememberSaveable(source.id) { source.version }
     var targetId by rememberSaveable(source.id) { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
     var confirming by remember { mutableStateOf(false) }
@@ -302,7 +305,7 @@ private fun P0CategoryMerge(state: LedgerUiState, viewModel: LedgerViewModel, so
     val target = targets.firstOrNull { it.id == targetId }
     if (confirming && target != null) {
         P0Confirmation("Объединить категории?", "Все операции категории «${source.name}» и её подкатегорий перейдут в «${categoryPath(target.id, state.categories)}». Исходная категория и её подкатегории будут архивированы. Автоматически отменить объединение нельзя.",
-            "Объединить историю", "category_merge", state, viewModel, { confirming = false }) { viewModel.mergeCategory(source, target) }
+            "Объединить историю", "category_merge", state, viewModel, { confirming = false }) { viewModel.mergeCategory(source.copy(version = baseVersion), target) }
         return
     }
     P0Sheet("category_merge_sheet", "Меньше категорий.\nБольше порядка.", "Категории / объединение", state.busy, onDismiss) {

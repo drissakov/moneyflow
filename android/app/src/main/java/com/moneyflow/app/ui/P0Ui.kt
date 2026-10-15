@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -41,6 +42,16 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 internal val P0Shape = RoundedCornerShape(topStart = 28.dp, topEnd = 8.dp, bottomEnd = 28.dp, bottomStart = 8.dp)
+
+/** Configuration recreation preserves drafts; an actual account switch clears them. */
+@Composable
+internal fun P0ResetOnUserChange(userId: String?, onReset: () -> Unit) {
+    var previousUserId by rememberSaveable { mutableStateOf(userId) }
+    val currentReset by rememberUpdatedState(onReset)
+    LaunchedEffect(userId) {
+        if (previousUserId != userId) { currentReset(); previousUserId = userId }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -157,7 +168,7 @@ internal fun P0Submit(text: String, tag: String, busy: Boolean, enabled: Boolean
 @Composable
 internal fun P0Confirmation(title: String, explanation: String, action: String, tag: String,
     state: LedgerUiState, viewModel: LedgerViewModel, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    val revision = remember { state.revision }
+    val revision = rememberSaveable(tag) { state.revision }
     LaunchedEffect(state.revision) { if (state.revision != revision) onDismiss() }
     P0Sheet(tag, title, "Подтверждение", state.busy, onDismiss) {
         Text(explanation, style = MaterialTheme.typography.bodyLarge)
