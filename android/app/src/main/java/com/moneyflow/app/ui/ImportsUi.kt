@@ -162,9 +162,8 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
         state.draft?.let { draft ->
             val visibleRows = if (!uncategorizedOnly) draft.rows else draft.rows.filter { row ->
                 val choice = state.choices[row.rowId]
-                choice?.selected == true && !choice.excludeFromAnalytics && (state.categories.none {
-                    it.id == choice.categoryId && it.kind == row.kind && !it.archived
-                } || (row.rowId == lastCategoryEditedId && state.similarCategoryCount(row.rowId) > 0))
+                choice?.selected == true && !choice.excludeFromAnalytics && (!activeImportCategory(state.categories, choice.categoryId, row.kind) ||
+                    (row.rowId == lastCategoryEditedId && state.similarCategoryCount(row.rowId) > 0))
             }
             val visibleIds = visibleRows.map { it.rowId }.toSet()
             val otherMovementReviews = if (!uncategorizedOnly) emptyList() else draft.rows.filter { row ->
@@ -278,7 +277,7 @@ internal fun ImportsScreen(state: ImportUiState, viewModel: ImportViewModel, man
 private fun ImportReviewRow(row: ImportPreviewRow, choice: ImportRowChoice, transfer: Boolean,
     state: ImportUiState, viewModel: ImportViewModel, editable: Boolean, onCategoryEdited: (Int) -> Unit) {
     var details by rememberSaveable(row.rowId) { mutableStateOf(false) }
-    val hasActiveCategory = state.categories.any { it.id == choice.categoryId && it.kind == row.kind && !it.archived }
+    val hasActiveCategory = activeImportCategory(state.categories, choice.categoryId, row.kind)
     ImportCard {
         Row(verticalAlignment = Alignment.Top) {
             Checkbox(choice.selected, onCheckedChange = { viewModel.selectRow(row.rowId, it) },
