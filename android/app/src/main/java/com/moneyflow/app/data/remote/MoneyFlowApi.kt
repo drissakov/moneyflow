@@ -132,6 +132,7 @@ interface MoneyFlowApi {
         @Query("account_id") accountId: String?,
         @Header("Authorization") authorization: String,
         @Query("mode") mode: String = "original",
+        @Query("valuation") valuation: String? = null,
     ): AdvancedAnalyticsReportDto
     @GET("api/v1/planning") suspend fun planning(
         @Query("from") from: String,

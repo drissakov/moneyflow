@@ -1808,20 +1808,31 @@ paths:
       - Analytics
       operationId: analyticsDashboard
       summary: Compare monthly income, expenses, categories and reconstructed ledger balances
-      description: 'Returns exactly3,6 or12 zero-filled calendar months ending at month. Boundaries use fixedUTC+5,
-        including stored future-dated confirmed transactions. Current-month comparisons are full calendar ranges;
+      description: 'Returns exactly3,6 or12 zero-filled calendar months ending at month. Boundaries use fixedUTC+5.
+        Original and latest_snapshot modes include stored future-dated confirmed transactions and full calendar ranges;
         period_status explicitly identifies current/future reports. mode=original (the default) reports one original
         currency without requesting FX. No account_id means ALL owned accounts in that currency, including archived
         and excluded-from-portfolio accounts. A selected account must be owned and match currency. mode=consolidated
         requires currency=KZT and no account_id; it includes ALL owner accounts in every currency, including archived
-        and excluded-from-portfolio accounts. Consolidated amounts use one latest available Frankfurter snapshot for
-        the entire chart, not historical exchange rates or bank settlement rates. conversion lists the exact unique
-        account currency set and its displayed major-unit rates to KZT; calculations use exact rational rates before
+        and excluded-from-portfolio accounts. valuation=latest_snapshot (the backward-compatible default) uses one latest
+        available Frankfurter snapshot for the entire chart. valuation=historical converts each transaction on its
+        Kazakhstan calendar date and each account balance at the end of its month. The first opening is valued on
+        the last day before the chart starts; subsequent openings equal the previous closing. Current historical
+        reports include only occurred_at <= as_of, value their closing on today, and are preliminary. Future historical
+        months are rejected with 400. Each required anchor observation is the most recent published date not after
+        its valuation date, at most 14 calendar days old. There is no fallback to current or future rates. Historical
+        conversion metadata covers from_date through to_date; rates contains only used foreign currency/date pairs,
+        sorted by valuation_date then currency, with both actual anchor observation dates. USD source_rate_date is
+        null because USD is the mathematical anchor. Historical KZT-only/empty scopes have an empty rates array.
+        latest_snapshot lists unique account currencies and identity KZT where applicable. Calculations use exact rational rates before
         half-even rounding. Each income/expense fact is converted once before monthly and category aggregation. Each
         account native boundary balance is converted once before summing; ledger_change_minor is closing minus opening
-        and may differ from converted facts because of transfers, fees, exclusions and rounding. No partial report is
+        and may differ from converted facts because of transfers, fees, exclusions and rounding. Historical series
+        additionally expose converted_ledger_change_minor (all signed movements at operation-date rates) and
+        fx_revaluation_minor = ledger_change_minor - converted_ledger_change_minor. Revaluation includes rounding and
+        never contributes to income/expenses. These are market-reference reports, not bank settlement rates. No partial report is
         returned if any required pair is missing: 503 rates_unavailable. Usable stale snapshots are explicitly marked.
-        An empty or KZT-only scope skips FX fetching and returns null fetched_at, stale=false and identity rates only.
+        An empty or KZT-only scope skips FX fetching and returns null fetched_at, stale=false and no foreign rates.
 
 
         One read-only repeatable-read transaction keeps scope, series and category facts coherent; any FX cache refresh
@@ -1838,7 +1849,8 @@ paths:
         amount_minor equals its direct_amount_minor plus current children totals. Use GET/transactions with the same
         currency, account_id (if selected), kind, from/to and analytics_only=true; category_id includes subtree, category_exact=true
         selects direct root entries, uncategorized=true selects null categories. Consolidated drilldown omits currency
-        and account_id, so original native transaction amounts remain visible across all accounts. All output amounts and derived deltas/balances
+        and account_id, so original native transaction amounts remain visible across all accounts. For a current historical
+        drilldown cap its exclusive to at as_of plus one microsecond. All output amounts and derived deltas/balances
         must fit signed64; overflow returns409.'
       parameters:
       - name: mode
@@ -1848,6 +1860,14 @@ paths:
           type: string
           enum: [original, consolidated]
           default: original
+      - name: valuation
+        in: query
+        required: false
+        description: Only valid for consolidated mode. Omission preserves latest_snapshot for older clients.
+        schema:
+          type: string
+          enum: [historical, latest_snapshot]
+          default: latest_snapshot
       - name: month
         in: query
         required: true
@@ -3863,6 +3883,22 @@ components:
           type: string
           pattern: ^-?(0|[1-9][0-9]*)$
           description: Canonical signed64 integer minor units; derived values never wrap.
+        opening_valuation_date:
+          type: string
+          format: date
+          description: Historical mode only; preceding boundary valuation date.
+        valuation_date:
+          type: string
+          format: date
+          description: Historical mode only; month end, or today for the current month.
+        converted_ledger_change_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Historical mode only; signed sum of all nondeleted movements converted individually on their operation dates.
+        fx_revaluation_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Historical mode only; total balance change minus converted ledger change, including rounding effects.
     AnalyticsComparisonBucket:
       type: object
       additionalProperties: false
@@ -3917,6 +3953,19 @@ components:
           format: date
           nullable: true
           description: Older contributing anchor observation date; null for identity KZT.
+        valuation_date:
+          type: string
+          format: date
+          description: Historical mode only; the requested operation or account-boundary calendar date.
+        source_rate_date:
+          type: string
+          format: date
+          nullable: true
+          description: Historical mode only; source/USD observation date, null for the mathematical USD anchor.
+        target_rate_date:
+          type: string
+          format: date
+          description: Historical mode only; KZT/USD observation date.
     AnalyticsDashboardConversion:
       type: object
       additionalProperties: false
@@ -3924,7 +3973,7 @@ components:
       properties:
         policy:
           type: string
-          enum: [latest_snapshot]
+          enum: [latest_snapshot, historical]
         provider:
           type: string
           enum: [Frankfurter]
@@ -3936,9 +3985,21 @@ components:
           type: boolean
         rates:
           type: array
-          description: Unique account currencies sorted by code, including KZT identity if a KZT account exists.
+          description: Latest snapshot uses unique account currencies sorted by code including KZT identity. Historical uses only used foreign currency/date pairs sorted by valuation_date then currency.
           items:
             $ref: '#/components/schemas/AnalyticsDashboardRate'
+        from_date:
+          type: string
+          format: date
+          description: Historical mode only; first opening valuation date.
+        to_date:
+          type: string
+          format: date
+          description: Historical mode only; last closing valuation date.
+        max_age_days:
+          type: integer
+          enum: [14]
+          description: Historical mode only; maximum allowed age of a contributing observation at its valuation date.
     AnalyticsDashboard:
       type: object
       additionalProperties: false

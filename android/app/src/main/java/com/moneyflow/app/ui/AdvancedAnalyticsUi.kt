@@ -34,13 +34,15 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
     var tab by rememberSaveable { mutableStateOf("comparison") }
     var kind by rememberSaveable { mutableStateOf("expense") }
     var choosingAccount by rememberSaveable { mutableStateOf(false) }
-    var selectedSeriesMonth by rememberSaveable(state.month, state.currency, state.months, state.accountId, state.mode) { mutableStateOf(state.month) }
-    var selectedRootId by rememberSaveable(state.month, state.currency, state.accountId, state.mode, kind) { mutableStateOf<String?>(null) }
+    var selectedSeriesMonth by rememberSaveable(state.month, state.currency, state.months, state.accountId, state.mode, state.valuation) { mutableStateOf(state.month) }
+    var selectedRootId by rememberSaveable(state.month, state.currency, state.accountId, state.mode, state.valuation, kind) { mutableStateOf<String?>(null) }
     var expandedTable by rememberSaveable { mutableStateOf(false) }
     P0ResetOnUserChange(state.session?.user?.id) { selectedRootId = null; choosingAccount = false; tab = "comparison" }
     LaunchedEffect(Unit) { viewModel.refresh() }
     val consolidated = state.mode == "consolidated"
-    val report = state.report?.takeIf { it.month == state.month && it.currency == state.currency && it.months == state.months && it.accountId == state.accountId && it.mode == state.mode }
+    val historical = consolidated && state.valuation == "historical"
+    val report = state.report?.takeIf { it.month == state.month && it.currency == state.currency && it.months == state.months && it.accountId == state.accountId && it.mode == state.mode &&
+        (!consolidated || it.conversion?.policy == state.valuation) }
     val month = runCatching { YearMonth.parse(state.month) }.getOrDefault(YearMonth.now())
     val point = report?.series?.firstOrNull { it.month == selectedSeriesMonth } ?: report?.series?.lastOrNull()
     val roots = (if (kind == "income") report?.income else report?.expenses).orEmpty()
@@ -67,12 +69,14 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
             }
         }
         item { ReportCurrencyMode(state.mode, state.loading) { choosingAccount = false; viewModel.setMode(it) } }
+        if (consolidated) item { ReportValuationMode(state.valuation, state.loading, viewModel::setValuation) }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                ReportMonthNavigation(month, state.loading, viewModel::setMonth)
+                ReportMonthNavigation(month, state.loading, if (historical) YearMonth.parse(PlanningCalendar.month()) else YearMonth.of(2199, 12), viewModel::setMonth)
                 if (consolidated) {
                     Text("Все счета · KZT", style = MaterialTheme.typography.titleLarge, modifier = Modifier.testTag("reports_consolidated_scope"))
-                    Text("Все валюты, включая архивные счета и скрытые из общего баланса. Доходы, расходы и остатки всех месяцев пересчитаны по одному текущему набору курсов.",
+                    Text(if (historical) "Все валюты, включая архивные и скрытые счета. Операции — по курсу на их дату. Баланс — по курсу на конец месяца, в текущем месяце — на сегодня."
+                        else "Все валюты, включая архивные счета и скрытые из общего баланса. Доходы, расходы и остатки всех месяцев пересчитаны по одному текущему набору курсов.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     CurrencySelector("Валюта операций", SupportedCurrency.fromCode(state.currency), { viewModel.setCurrency(it.code) },
@@ -101,7 +105,9 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
         if (state.offline) item { P0Message("Сохранённый отчёт${state.receivedAt?.let { " от ${analyticsTimestamp(it.toString())}" }.orEmpty()}. Новые изменения могут быть не учтены; обновите данные при подключении.") }
         if (report != null) {
             report.conversion?.takeIf { consolidated }?.let { conversion -> item { ReportsConversionContext(conversion) } }
-            if (report.periodStatus != "past") item { P0Message(if (report.periodStatus == "current")
+            if (report.periodStatus != "past") item { P0Message(if (historical)
+                "Месяц ещё идёт. Показаны операции по ${analyticsTimestamp(report.asOf)} и остаток на этот момент. Будущие операции не включены. Предыдущий месяц показан целиком."
+                else if (report.periodStatus == "current")
                 "Месяц ещё идёт. Итоги предварительные и включают все внесённые операции этого месяца, в том числе с будущей датой. Предыдущий месяц показан целиком."
                 else "Будущий месяц: показаны только уже внесённые операции. Плановые платежи без подтверждения сюда не входят.") }
             when (tab) {
@@ -124,7 +130,8 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
                         onCategories = { selectedRootId = null; tab = "categories"; viewModel.setMonth(point.month) },
                         onHistory = { type -> onOpenHistory(analyticsHistoryFilter(state, type, point.from, point.to)) }) }
                     item { P0Message("Остатки восстановлены из текущих начальных остатков счетов и всей сохранённой истории. Здесь учитываются переводы и движения, исключённые из отчётов. Поэтому изменение остатка может отличаться от разницы доходов и расходов.") }
-                    item { Text(if (consolidated) "Все остатки выражены в тенге по одному текущему набору курсов. Это не история ежедневной валютной переоценки. Обновление курсов, изменение начального остатка или прошлой операции пересчитывает всю линию."
+                    item { Text(if (historical) "Остатки оцениваются по курсу на конец каждого месяца, текущий — на сегодня. Денежные движения пересчитаны по датам операций. Курсовая разница и округление показываются отдельно и не добавляются к доходам или расходам. Изменение начальных остатков или прошлых операций пересчитывает линию."
+                        else if (consolidated) "Все остатки выражены в тенге по одному текущему набору курсов. Обновление курсов, изменение начального остатка или прошлой операции пересчитывает всю линию."
                         else "Баланс каждой валюты показан отдельно. Изменение начального остатка или прошлой операции пересчитывает линию; валютная переоценка не добавляется.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
@@ -180,8 +187,9 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
                             Text(analyticsMonthName(row.month, true), style = MaterialTheme.typography.titleLarge)
                             if (tab == "balance") {
                                 PlanningReceiptLine("На начало", p0Money(row.openingBalanceMinor, report.currency))
-                                PlanningReceiptLine("На конец", p0Money(row.closingBalanceMinor, report.currency), true)
+                                PlanningReceiptLine(analyticsClosingBalanceLabel(row, short = true), p0Money(row.closingBalanceMinor, report.currency), true)
                                 PlanningReceiptLine("Изменение остатка", analyticsSignedMoney(row.ledgerChangeMinor, report.currency))
+                                ReportHistoricalBalanceDetails(row, report.currency)
                             } else {
                                 PlanningReceiptLine("Доходы", p0Money(row.incomeMinor, report.currency))
                                 PlanningReceiptLine("Расходы", p0Money(row.expenseMinor, report.currency))
@@ -220,40 +228,68 @@ private fun ReportCurrencyMode(mode: String, loading: Boolean, onMode: (String) 
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ReportValuationMode(valuation: String, loading: Boolean, onValuation: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("ПЕРЕСЧЁТ ВАЛЮТ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            listOf("historical" to "По датам", "latest_snapshot" to "По текущему курсу").forEach { (id, label) ->
+                FilterChip(valuation == id, { onValuation(id) }, enabled = !loading, label = { Text(label) },
+                    modifier = Modifier.testTag("reports_valuation_$id"))
+            }
+        }
+    }
+}
+
 @Composable
 private fun ReportsConversionContext(conversion: AdvancedAnalyticsConversion) {
+    val historical = conversion.policy == "historical"
     Surface(shape = P0Shape, color = MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().testTag("reports_conversion_context")) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("КУРСЫ · ${conversion.provider.uppercase()}", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (conversion.stale) Text("Использованы сохранённые курсы. Они могут отличаться от последних доступных; попробуйте обновить отчёт.",
+            if (conversion.stale) Text(if (historical) "Использованы сохранённые исторические курсы. Проверка обновлений сейчас недоступна; попробуйте обновить отчёт позже."
+                else "Использованы сохранённые курсы. Они могут отличаться от последних доступных; попробуйте обновить отчёт.",
                 style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.testTag("reports_conversion_stale"))
-            conversion.rates.sortedBy { it.currency }.forEach { rate ->
+            if (historical) {
+                Text("История ${analyticsDate(requireNotNull(conversion.fromDate))} — ${analyticsDate(requireNotNull(conversion.toDate))}",
+                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("reports_historical_coverage"))
+                if (conversion.rates.isNotEmpty()) Text("Курсы для остатка на ${analyticsDate(requireNotNull(conversion.toDate))}:",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            val displayedRates = if (historical) conversion.rates.filter { it.valuationDate == conversion.toDate } else conversion.rates
+            displayedRates.sortedBy { it.currency }.forEach { rate ->
                 Text(analyticsConversionRateText(rate), style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("reports_conversion_rate_${rate.currency}"))
+                if (historical && rate.sourceRateDate != null && rate.sourceRateDate != rate.targetRateDate) {
+                    Text("Публикации: ${rate.currency} ${analyticsDate(rate.sourceRateDate)}, KZT ${analyticsDate(requireNotNull(rate.targetRateDate))}",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             if (conversion.rates.none { it.currency != "KZT" }) Text("В этом отчёте нет валютных сумм для конвертации.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(conversion.fetchedAt?.let { "Курсы получены ${analyticsTimestamp(it)} · UTC+5" } ?: "Время получения курсов не указано.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Один набор курсов для всего периода. Исторические курсы по дням не применяются. Операции по нажатию открываются в исходных валютах.",
+            conversion.fetchedAt?.let { Text("Курсы получены ${analyticsTimestamp(it)} · UTC+5",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Text(if (historical) "Для каждой даты используется последняя публикация не позже неё, давностью до 14 дней. Доходы и расходы — по датам операций; остатки — на границах месяцев. Операции по нажатию открываются в исходных валютах."
+                else "Один набор курсов для всего периода. Операции по нажатию открываются в исходных валютах.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
 @Composable
-private fun ReportMonthNavigation(month: YearMonth, loading: Boolean, onMonth: (String) -> Unit) {
+private fun ReportMonthNavigation(month: YearMonth, loading: Boolean, lastMonth: YearMonth, onMonth: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("МЕСЯЦ ДЛЯ СРАВНЕНИЯ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = { onMonth(month.minusMonths(1).toString()) }, enabled = !loading && month > YearMonth.of(1901, 1), contentPadding = PaddingValues(12.dp),
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Предыдущий месяц" }.testTag("reports_previous_month")) { Text("←") }
             Text(analyticsMonthName(month.toString(), true), Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            OutlinedButton(onClick = { onMonth(month.plusMonths(1).toString()) }, enabled = !loading && month < YearMonth.of(2199, 12), contentPadding = PaddingValues(12.dp),
+            OutlinedButton(onClick = { onMonth(month.plusMonths(1).toString()) }, enabled = !loading && month < lastMonth, contentPadding = PaddingValues(12.dp),
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Следующий месяц" }.testTag("reports_next_month")) { Text("→") }
         }
     }
@@ -303,8 +339,9 @@ private fun ReportMonthDetails(point: AnalyticsMonthPoint, currency: String, bal
     ReportChartCard("ВЫБРАННЫЙ МЕСЯЦ", analyticsMonthName(point.month, true)) {
         if (balance) {
             PlanningReceiptLine("На начало месяца", p0Money(point.openingBalanceMinor, currency))
-            PlanningReceiptLine("На конец месяца", p0Money(point.closingBalanceMinor, currency), true)
+            PlanningReceiptLine(analyticsClosingBalanceLabel(point), p0Money(point.closingBalanceMinor, currency), true)
             PlanningReceiptLine("Изменение остатка", analyticsSignedMoney(point.ledgerChangeMinor, currency))
+            ReportHistoricalBalanceDetails(point, currency)
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
         PlanningReceiptLine("Доходы", p0Money(point.incomeMinor, currency))
@@ -320,11 +357,33 @@ private fun ReportMonthDetails(point: AnalyticsMonthPoint, currency: String, bal
 
 internal fun analyticsSignedMoney(amount: Long, currency: String): String = (if (amount > 0) "+ " else "") + p0Money(amount, currency)
 
+internal fun analyticsClosingBalanceLabel(point: AnalyticsMonthPoint, short: Boolean = false): String =
+    point.valuationDate?.takeIf { it != YearMonth.parse(point.month).atEndOfMonth().toString() }
+        ?.let { "На ${analyticsDate(it)}" } ?: if (short) "На конец" else "На конец месяца"
+
 internal fun analyticsHistoryFilter(state: AdvancedAnalyticsUiState, kind: String?, from: String, to: String,
-    categoryId: String? = null, uncategorized: Boolean = false, categoryExact: Boolean = false): LedgerFilter =
-    LedgerFilter(accountId = state.accountId.takeUnless { state.mode == "consolidated" }, categoryId = categoryId, kind = kind, from = from, to = to,
+    categoryId: String? = null, uncategorized: Boolean = false, categoryExact: Boolean = false): LedgerFilter {
+    val cutoff = state.report?.takeIf { state.mode == "consolidated" && state.valuation == "historical" && it.conversion?.policy == "historical" }
+        ?.asOf?.let { Instant.parse(it).plusNanos(1_000) }
+    val exclusiveTo = cutoff?.takeIf { it < Instant.parse(to) }?.toString() ?: to
+    return LedgerFilter(accountId = state.accountId.takeUnless { state.mode == "consolidated" }, categoryId = categoryId, kind = kind, from = from, to = exclusiveTo,
         currency = state.currency.takeUnless { state.mode == "consolidated" },
         analyticsOnly = true, uncategorized = uncategorized, categoryExact = categoryExact)
+}
+
+@Composable
+private fun ReportHistoricalBalanceDetails(point: AnalyticsMonthPoint, currency: String) {
+    point.convertedLedgerChangeMinor?.let {
+        PlanningReceiptLine("Движение денег", analyticsSignedMoney(it, currency), tag = "reports_balance_money_movement")
+    }
+    point.fxRevaluationMinor?.let {
+        PlanningReceiptLine("Курсовая разница и округление", analyticsSignedMoney(it, currency), tag = "reports_balance_fx_revaluation")
+    }
+    point.valuationDate?.let { closing ->
+        Text("Оценка: ${analyticsDate(requireNotNull(point.openingValuationDate))} → ${analyticsDate(closing)}",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
 
 internal fun analyticsConversionRateText(rate: AdvancedAnalyticsRate): String {
     val date = rate.rateDate?.let { value -> runCatching { java.time.LocalDate.parse(value).format(DateTimeFormatter.ofPattern("dd.MM.yyyy")) }.getOrDefault(value) }
@@ -351,3 +410,5 @@ internal fun advancedCategoryChildren(root: AdvancedAnalyticsCategory): List<Adv
 private fun analyticsTimestamp(value: String): String = runCatching {
     Instant.parse(value).atOffset(ZoneOffset.ofHours(5)).format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
 }.getOrDefault(value)
+
+private fun analyticsDate(value: String): String = java.time.LocalDate.parse(value).format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))

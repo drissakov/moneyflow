@@ -93,7 +93,9 @@ class AdvancedAnalyticsRepositoryTest {
             val nativeRequest = fixture.server.takeRequest(1, TimeUnit.SECONDS)!!
             val convertedRequest = fixture.server.takeRequest(1, TimeUnit.SECONDS)!!
             assertEquals("original", nativeRequest.requestUrl?.queryParameter("mode"))
+            assertNull(nativeRequest.requestUrl?.queryParameter("valuation"))
             assertEquals("consolidated", convertedRequest.requestUrl?.queryParameter("mode"))
+            assertEquals("historical", convertedRequest.requestUrl?.queryParameter("valuation"))
             assertNull(convertedRequest.requestUrl?.queryParameter("account_id"))
             assertEquals("KZT", convertedRequest.requestUrl?.queryParameter("currency"))
             fixture.server.enqueue(json("""{"error":{"code":"exchange_rates_unavailable","message":"Unavailable"}}""").setResponseCode(503))
@@ -117,6 +119,48 @@ class AdvancedAnalyticsRepositoryTest {
                 assertEquals(valid.report, fixture.repo.cachedAdvancedAnalytics(consolidated)?.report)
             }
             assertNull(fixture.repo.cachedAdvancedAnalytics(filter))
+        }
+    }
+
+    @Test fun historicalAndLatestValuationsHaveIndependentCachesAndRejectWrongPolicyResponses() = runBlocking {
+        Fixture().use { fixture ->
+            val historical = filter.copy(mode = "consolidated")
+            val latest = historical.copy(valuation = "latest_snapshot")
+            fixture.server.enqueue(json(AdvancedAnalyticsTestFixtures.report(filter.month, mode = "consolidated", valuation = "latest_snapshot")))
+            val snapshot = fixture.repo.advancedAnalytics(latest)
+            assertNull(fixture.repo.cachedAdvancedAnalytics(historical))
+            fixture.server.enqueue(json(AdvancedAnalyticsTestFixtures.report(filter.month, mode = "consolidated", valuation = "latest_snapshot")))
+            try { fixture.repo.advancedAnalytics(historical); fail("Latest rates must not populate historical cache") } catch (_: IllegalArgumentException) { }
+            assertNull(fixture.repo.cachedAdvancedAnalytics(historical))
+            fixture.server.enqueue(json(AdvancedAnalyticsTestFixtures.report(filter.month, mode = "consolidated")))
+            val history = fixture.repo.advancedAnalytics(historical)
+            assertEquals("historical", history.report.conversion?.policy)
+            assertEquals(snapshot.report, fixture.repo.cachedAdvancedAnalytics(latest)?.report)
+            assertEquals(history.report, fixture.repo.cachedAdvancedAnalytics(historical)?.report)
+            fixture.repo.expireSession(fixture.repo.session.value)
+            assertNull(fixture.db.dao().analyticsSnapshot(user, Gson().toJson(latest)))
+            assertNull(fixture.db.dao().analyticsSnapshot(user, Gson().toJson(historical)))
+        }
+    }
+
+    @Test fun versionSevenSnapshotsRemainReadableOnlyForTheirOriginalValuationAndValidatedScope() = runBlocking {
+        Fixture().use { fixture ->
+            fun legacyKey(value: AdvancedAnalyticsFilter) = Gson().toJsonTree(value).asJsonObject.apply { remove("valuation") }.toString()
+            val originalPayload = AdvancedAnalyticsTestFixtures.report(filter.month)
+            fixture.db.dao().putAnalyticsSnapshot(AnalyticsSnapshotEntity(user, legacyKey(filter), originalPayload, Instant.now().toString()))
+            assertEquals("original", fixture.repo.cachedAdvancedAnalytics(filter)?.report?.mode)
+            val latest = filter.copy(mode = "consolidated", valuation = "latest_snapshot")
+            val latestPayload = AdvancedAnalyticsTestFixtures.report(filter.month, mode = "consolidated", valuation = "latest_snapshot")
+            fixture.db.dao().putAnalyticsSnapshot(AnalyticsSnapshotEntity(user, legacyKey(latest), latestPayload, Instant.now().toString()))
+            assertEquals("latest_snapshot", fixture.repo.cachedAdvancedAnalytics(latest)?.report?.conversion?.policy)
+            assertNull(fixture.repo.cachedAdvancedAnalytics(latest.copy(valuation = "historical")))
+            assertNull(fixture.repo.cachedAdvancedAnalytics(filter.copy(currency = "USD")))
+            // A legacy key is only a candidate; payload scope and valuation still have to agree.
+            fixture.db.dao().putAnalyticsSnapshot(AnalyticsSnapshotEntity(user, legacyKey(latest), originalPayload, Instant.now().toString()))
+            assertNull(fixture.repo.cachedAdvancedAnalytics(latest))
+            val historicalPayload = AdvancedAnalyticsTestFixtures.report(filter.month, mode = "consolidated")
+            fixture.db.dao().putAnalyticsSnapshot(AnalyticsSnapshotEntity(user, legacyKey(latest), historicalPayload, Instant.now().toString()))
+            assertNull(fixture.repo.cachedAdvancedAnalytics(latest))
         }
     }
 

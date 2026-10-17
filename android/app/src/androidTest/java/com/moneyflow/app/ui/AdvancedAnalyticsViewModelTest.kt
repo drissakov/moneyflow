@@ -110,6 +110,32 @@ class AdvancedAnalyticsViewModelTest {
         }
     }
 
+    @Test fun historicalSelectionClampsFutureMonthAndOfflineValuationNeverUsesTheOtherPolicyCache() = runBlocking {
+        Fixture().use { fixture ->
+            fixture.awaitReady()
+            val current = PlanningCalendar.month()
+            val future = YearMonth.parse(current).plusMonths(1).toString()
+            fixture.main { fixture.vm.setMonth(future) }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || fixture.vm.state.value.report?.month != future) delay(10) }
+            fixture.main { fixture.vm.setMode("consolidated") }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || fixture.vm.state.value.report?.conversion?.policy != "historical") delay(10) }
+            assertEquals(current, fixture.vm.state.value.month)
+            assertEquals("historical", fixture.vm.state.value.valuation)
+            fixture.main { fixture.vm.setMonth(future) }
+            assertEquals(current, fixture.vm.state.value.month)
+            assertNotNull(fixture.vm.state.value.error)
+            fixture.main { fixture.vm.setValuation("latest_snapshot") }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || fixture.vm.state.value.report?.conversion?.policy != "latest_snapshot") delay(10) }
+            fixture.status.set(503)
+            fixture.main { fixture.vm.setValuation("historical") }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || !fixture.vm.state.value.offline) delay(10) }
+            assertEquals("historical", fixture.vm.state.value.report?.conversion?.policy)
+            fixture.main { fixture.vm.setValuation("latest_snapshot") }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || !fixture.vm.state.value.offline) delay(10) }
+            assertEquals("latest_snapshot", fixture.vm.state.value.report?.conversion?.policy)
+        }
+    }
+
     private inner class Fixture : AutoCloseable {
         private val instrumentation = InstrumentationRegistry.getInstrumentation()
         private val user = "a4444444-4444-4444-8444-444444444444"
@@ -141,7 +167,7 @@ class AdvancedAnalyticsViewModelTest {
                     val url = requireNotNull(request.requestUrl)
                     return json(AdvancedAnalyticsTestFixtures.report(requireNotNull(url.queryParameter("month")), requireNotNull(url.queryParameter("currency")),
                         requireNotNull(url.queryParameter("months")).toInt(), url.queryParameter("account_id"),
-                        mode = url.queryParameter("mode") ?: "original"))
+                        mode = url.queryParameter("mode") ?: "original", valuation = url.queryParameter("valuation") ?: "historical"))
                 }
             }
             server.start()

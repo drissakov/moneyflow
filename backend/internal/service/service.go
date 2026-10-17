@@ -30,19 +30,21 @@ var (
 )
 
 type Service struct {
-	DB         *gorm.DB
-	sessionTTL time.Duration
-	hashSlots  chan struct{}
-	dummyHash  string
-	fxCache    *fx.Cache
-	now        func() time.Time
+	DB           *gorm.DB
+	sessionTTL   time.Duration
+	hashSlots    chan struct{}
+	dummyHash    string
+	fxCache      *fx.Cache
+	historicalFX *fx.HistoricalCache
+	now          func() time.Time
 }
 
 type Options struct {
-	FXProvider fx.Provider
-	FXCacheTTL time.Duration
-	FXMaxStale time.Duration
-	Now        func() time.Time
+	FXProvider           fx.Provider
+	HistoricalFXProvider fx.HistoricalProvider
+	FXCacheTTL           time.Duration
+	FXMaxStale           time.Duration
+	Now                  func() time.Time
 }
 
 func New(db *gorm.DB, sessionTTL time.Duration, options ...Options) (*Service, error) {
@@ -69,8 +71,12 @@ func New(db *gorm.DB, sessionTTL time.Duration, options ...Options) (*Service, e
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.HistoricalFXProvider == nil {
+		opts.HistoricalFXProvider, _ = opts.FXProvider.(fx.HistoricalProvider)
+	}
 	return &Service{DB: db, sessionTTL: sessionTTL, hashSlots: make(chan struct{}, 2), dummyHash: dummy, now: opts.Now,
-		fxCache: fx.NewCache(db, opts.FXProvider, opts.FXCacheTTL, opts.FXMaxStale, opts.Now)}, nil
+		fxCache:      fx.NewCache(db, opts.FXProvider, opts.FXCacheTTL, opts.FXMaxStale, opts.Now),
+		historicalFX: fx.NewHistoricalCache(db, opts.HistoricalFXProvider, opts.Now)}, nil
 }
 
 func (s *Service) acquireHashSlot(ctx context.Context) (func(), error) {

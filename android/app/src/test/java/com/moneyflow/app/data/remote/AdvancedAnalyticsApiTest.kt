@@ -21,6 +21,7 @@ class AdvancedAnalyticsApiTest {
             assertEquals("2026-10", url.queryParameter("month")); assertEquals("KWD", url.queryParameter("currency"))
             assertEquals("12", url.queryParameter("months")); assertEquals(account, url.queryParameter("account_id"))
             assertEquals("original", url.queryParameter("mode"))
+            assertNull(url.queryParameter("valuation"))
             assertNull(url.queryParameter("timezone")); assertEquals("Bearer captured-session", request.getHeader("Authorization"))
             assertEquals(1, server.requestCount)
         }
@@ -52,6 +53,22 @@ class AdvancedAnalyticsApiTest {
             assertEquals("expense", url.queryParameter("kind")); assertEquals(category, url.queryParameter("category_id"))
             assertEquals("true", url.queryParameter("analytics_only")); assertEquals("true", url.queryParameter("category_exact"))
             assertEquals("false", url.queryParameter("include_deleted")); assertEquals("Bearer captured", request.getHeader("Authorization"))
+        }
+    }
+
+    @Test fun consolidatedValuationIsExplicitAndDoesNotSendClientConversionRates() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            val api = ApiFactory.create(server.url("/").toString()) { null }
+            listOf("historical", "latest_snapshot").forEach { policy ->
+                server.enqueue(json("{}"))
+                api.analyticsDashboard("2026-10", "KZT", 6, null, "Bearer captured", "consolidated", policy)
+                val url = server.takeRequest(1, TimeUnit.SECONDS)!!.requestUrl!!
+                assertEquals(policy, url.queryParameter("valuation"))
+                assertEquals("consolidated", url.queryParameter("mode"))
+                assertNull(url.queryParameter("account_id")); assertNull(url.queryParameter("rate"))
+                assertNull(url.queryParameter("timezone"))
+            }
         }
     }
 

@@ -1,7 +1,6 @@
 package com.moneyflow.app.ui
 
-import com.moneyflow.app.data.domain.AdvancedAnalyticsCategory
-import com.moneyflow.app.data.domain.AdvancedAnalyticsRate
+import com.moneyflow.app.data.domain.*
 import org.junit.Assert.*
 import org.junit.Test
 import java.math.BigDecimal
@@ -98,5 +97,43 @@ class AdvancedAnalyticsPresentationTest {
             analyticsConversionRateText(AdvancedAnalyticsRate("USD", BigDecimal("0.00000000000123456789"), "2026-10-16")))
         assertEquals("1 EUR ≈ 1,234564 KZT · 16.10.2026",
             analyticsConversionRateText(AdvancedAnalyticsRate("EUR", BigDecimal("1.2345645"), "2026-10-16")))
+    }
+
+    @Test fun selectingHistoricalValuationNormalizesOnlyFutureConsolidatedMonths() {
+        val future = AdvancedAnalyticsFilter("2026-12", mode = "consolidated")
+        assertEquals("2026-10", future.normalizeHistoricalMonth("2026-10").month)
+        assertEquals("2026-12", future.copy(valuation = "latest_snapshot").normalizeHistoricalMonth("2026-10").month)
+        assertEquals("2026-12", future.copy(mode = "original").normalizeHistoricalMonth("2026-10").month)
+        assertEquals("2026-09", future.copy(month = "2026-09").normalizeHistoricalMonth("2026-10").month)
+    }
+
+    @Test fun historicalDrillDownIncludesAsOfMicrosecondAndLeavesEarlierMonthsAndLatestModeWhole() {
+        val stamp = "2026-10-17T09:00:00.123456Z"
+        val report = AdvancedAnalyticsReport(month = "2026-10", currency = "KZT", timezone = "UTC+05:00", months = 6,
+            accountId = null, accountIds = emptyList(), from = "2026-09-30T19:00:00Z", to = "2026-10-31T19:00:00Z",
+            asOf = stamp, today = "2026-10-17", periodStatus = "current",
+            summary = AdvancedAnalyticsSummary(0, 0, 0, 0, 0, 0, 0, 0, 0), series = emptyList(), income = emptyList(), expenses = emptyList(),
+            mode = "consolidated", conversion = AdvancedAnalyticsConversion("historical", "Frankfurter", null, false, emptyList()))
+        val state = AdvancedAnalyticsUiState(mode = "consolidated", report = report)
+        val current = analyticsMonthBounds(YearMonth.of(2026, 10))
+        val exact = analyticsHistoryFilter(state, "expense", current.first, current.second)
+        assertEquals("2026-10-17T09:00:00.123457Z", exact.to)
+        assertEquals(current.first, exact.from); assertNull(exact.currency); assertTrue(exact.analyticsOnly)
+        exact.validate()
+        val previous = analyticsMonthBounds(YearMonth.of(2026, 9))
+        assertEquals(previous.second, analyticsHistoryFilter(state, "income", previous.first, previous.second).to)
+        assertEquals(current.second, analyticsHistoryFilter(state.copy(valuation = "latest_snapshot"), "expense", current.first, current.second).to)
+        assertEquals(current.second, analyticsHistoryFilter(state.copy(mode = "original"), "expense", current.first, current.second).to)
+    }
+
+    @Test fun unfinishedHistoricalBalanceUsesTheActualValuationDateInsteadOfAProjectedMonthEnd() {
+        val bounds = analyticsMonthBounds(YearMonth.of(2026, 10))
+        val point = AnalyticsMonthPoint("2026-10", bounds.first, bounds.second, 0, 0, 0, 100, 100, 0,
+            openingValuationDate = "2026-09-30", valuationDate = "2026-10-17", convertedLedgerChangeMinor = 0, fxRevaluationMinor = 0)
+        assertEquals("На 17.10.2026", analyticsClosingBalanceLabel(point))
+        assertEquals("На 17.10.2026", analyticsClosingBalanceLabel(point, short = true))
+        assertEquals("На конец месяца", analyticsClosingBalanceLabel(point.copy(valuationDate = "2026-10-31")))
+        assertEquals("На конец", analyticsClosingBalanceLabel(point.copy(valuationDate = "2026-10-31"), short = true))
+        assertEquals("На конец месяца", analyticsClosingBalanceLabel(point.copy(valuationDate = null)))
     }
 }

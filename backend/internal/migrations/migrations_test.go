@@ -171,4 +171,11 @@ func TestIntegrationMulticurrencyMigrationPreservesExistingLedger(t *testing.T) 
 			t.Fatal("new transaction currency rejected")
 		}
 	}
+	var historicalCount, migrationCount int64
+	if err := db.Raw("SELECT count(*) FROM fx_historical_snapshots").Scan(&historicalCount).Error; err != nil || historicalCount != 0 {
+		t.Fatal("historical FX migration did not create empty public cache safely")
+	}
+	if err := db.Raw("SELECT count(*) FROM schema_migrations WHERE version='007_historical_fx.sql'").Scan(&migrationCount).Error; err != nil || migrationCount != 1 {
+		t.Fatal("historical FX migration not recorded exactly once")
+	}
 }

@@ -63,27 +63,59 @@ data class AnalyticsMonthPointDto(
     @SerializedName("opening_balance_minor") val openingBalanceMinor: String,
     @SerializedName("closing_balance_minor") val closingBalanceMinor: String,
     @SerializedName("ledger_change_minor") val ledgerChangeMinor: String,
+    @SerializedName("opening_valuation_date") val openingValuationDate: String? = null,
+    @SerializedName("valuation_date") val valuationDate: String? = null,
+    @SerializedName("converted_ledger_change_minor") val convertedLedgerChangeMinor: String? = null,
+    @SerializedName("fx_revaluation_minor") val fxRevaluationMinor: String? = null,
 ) {
-    fun toDomain(expectedMonth: YearMonth): AnalyticsMonthPoint {
+    fun toDomain(expectedMonth: YearMonth, historicalToday: LocalDate? = null): AnalyticsMonthPoint {
         require(month == expectedMonth.toString()); validateMonthBounds(expectedMonth, from, to)
         val income = nonNegative(incomeMinor); val expense = nonNegative(expenseMinor); val net = parseServerMinor(netMinor)
         val opening = parseServerMinor(openingBalanceMinor); val closing = parseServerMinor(closingBalanceMinor); val change = parseServerMinor(ledgerChangeMinor)
         difference(net, income, expense); difference(change, closing, opening)
-        return AnalyticsMonthPoint(month, from, to, income, expense, net, opening, closing, change)
+        val flow: Long?; val revaluation: Long?
+        if (historicalToday != null) {
+            require(expectedMonth <= YearMonth.from(historicalToday))
+            require(openingValuationDate == expectedMonth.atDay(1).minusDays(1).toString())
+            require(valuationDate == minOf(expectedMonth.atEndOfMonth(), historicalToday).toString())
+            flow = parseServerMinor(requireNotNull(convertedLedgerChangeMinor))
+            revaluation = parseServerMinor(requireNotNull(fxRevaluationMinor))
+            difference(revaluation, change, flow)
+        } else {
+            require(openingValuationDate == null && valuationDate == null && convertedLedgerChangeMinor == null && fxRevaluationMinor == null)
+            flow = null; revaluation = null
+        }
+        return AnalyticsMonthPoint(month, from, to, income, expense, net, opening, closing, change,
+            openingValuationDate, valuationDate, flow, revaluation)
     }
 }
 
 data class AdvancedAnalyticsRateDto(
     val currency: String, val rate: String,
     @SerializedName("rate_date") val rateDate: String?,
+    @SerializedName("valuation_date") val valuationDate: String? = null,
+    @SerializedName("source_rate_date") val sourceRateDate: String? = null,
+    @SerializedName("target_rate_date") val targetRateDate: String? = null,
 ) {
-    fun toDomain(): AdvancedAnalyticsRate {
+    fun toDomain(historicalFrom: LocalDate? = null, historicalTo: LocalDate? = null): AdvancedAnalyticsRate {
         SupportedCurrency.fromCode(currency)
         val exact = validateRate(rate)
-        rateDate?.let { require(LocalDate.parse(it).toString() == it) }
-        if (currency == "KZT") require(exact.compareTo(BigDecimal.ONE) == 0 && rateDate == null)
-        else requireNotNull(rateDate)
-        return AdvancedAnalyticsRate(currency, exact, rateDate)
+        rateDate?.let(::exactDate)
+        if (historicalFrom != null && historicalTo != null) {
+            require(currency != "KZT")
+            val valuation = exactDate(requireNotNull(valuationDate))
+            require(valuation in historicalFrom..historicalTo)
+            val source = sourceRateDate?.let(::exactDate)
+            val target = exactDate(requireNotNull(targetRateDate))
+            require((currency == "USD") == (source == null))
+            listOfNotNull(source, target).forEach { require(it <= valuation && !it.isBefore(valuation.minusDays(14))) }
+            require(rateDate == listOfNotNull(source, target).minOrNull().toString())
+        } else {
+            require(valuationDate == null && sourceRateDate == null && targetRateDate == null)
+            if (currency == "KZT") require(exact.compareTo(BigDecimal.ONE) == 0 && rateDate == null)
+            else requireNotNull(rateDate)
+        }
+        return AdvancedAnalyticsRate(currency, exact, rateDate, valuationDate, sourceRateDate, targetRateDate)
     }
 }
 
@@ -91,18 +123,31 @@ data class AdvancedAnalyticsConversionDto(
     val policy: String, val provider: String,
     @SerializedName("fetched_at") val fetchedAt: String?,
     val stale: Boolean, val rates: List<AdvancedAnalyticsRateDto>,
+    @SerializedName("from_date") val fromDate: String? = null,
+    @SerializedName("to_date") val toDate: String? = null,
+    @SerializedName("max_age_days") val maxAgeDays: Int? = null,
 ) {
-    fun toDomain(hasAccounts: Boolean): AdvancedAnalyticsConversion {
-        require(policy == "latest_snapshot" && provider == "Frankfurter") { "Неизвестный источник курсов отчёта" }
+    fun toDomain(hasAccounts: Boolean, expectedPolicy: String = "latest_snapshot", expectedFrom: LocalDate? = null,
+        expectedTo: LocalDate? = null): AdvancedAnalyticsConversion {
+        require(policy == expectedPolicy && policy in setOf("latest_snapshot", "historical") && provider == "Frankfurter") { "Неизвестный источник курсов отчёта" }
         fetchedAt?.let(Instant::parse)
-        val codes = rates.map { it.currency }
-        require(codes == codes.distinct().sorted()) { "Курсы валют должны быть уникальными и упорядоченными" }
-        require(hasAccounts == rates.isNotEmpty()) { "Курсы отчёта не соответствуют списку счетов" }
-        val validated = rates.map { it.toDomain() }
+        val validated = if (policy == "historical") {
+            require(fromDate == requireNotNull(expectedFrom).toString() && toDate == requireNotNull(expectedTo).toString() && maxAgeDays == 14)
+            val keys = rates.map { "${it.valuationDate}:${it.currency}" }
+            require(keys == keys.distinct().sorted()) { "Курсы валют должны быть уникальными и упорядоченными по датам" }
+            require(hasAccounts || rates.isEmpty())
+            rates.map { it.toDomain(expectedFrom, expectedTo) }
+        } else {
+            require(fromDate == null && toDate == null && maxAgeDays == null)
+            val codes = rates.map { it.currency }
+            require(codes == codes.distinct().sorted()) { "Курсы валют должны быть уникальными и упорядоченными" }
+            require(hasAccounts == rates.isNotEmpty()) { "Курсы отчёта не соответствуют списку счетов" }
+            rates.map { it.toDomain() }
+        }
         if (validated.any { it.currency != "KZT" }) requireNotNull(fetchedAt)
         else require(fetchedAt == null && !stale)
         if (stale) requireNotNull(fetchedAt)
-        return AdvancedAnalyticsConversion(policy, provider, fetchedAt, stale, validated)
+        return AdvancedAnalyticsConversion(policy, provider, fetchedAt, stale, validated, fromDate, toDate, maxAgeDays)
     }
 }
 
@@ -130,21 +175,30 @@ data class AdvancedAnalyticsReportDto(
         accountId?.let(::validateUuid); accountIds.forEach(::validateUuid)
         require(accountIds == accountIds.distinct().sorted())
         if (accountId != null) require(accountIds == listOf(accountId))
-        val conversionSnapshot = if (reportMode == "consolidated") {
-            require(currency == "KZT" && accountId == null)
-            requireNotNull(conversion) { "В общем отчёте отсутствуют курсы конвертации" }.toDomain(accountIds.isNotEmpty())
-        } else {
-            require(conversion == null) { "Отчёт в исходной валюте не должен содержать конвертацию" }
-            null
-        }
         val selected = YearMonth.parse(month); validateMonthBounds(selected, from, to)
         val stamp = Instant.parse(asOf); val date = LocalDate.parse(today)
         require(date.toString() == today && stamp.atOffset(ZoneOffset.ofHours(5)).toLocalDate() == date)
         val currentMonth = YearMonth.from(date)
         require(periodStatus == when { selected < currentMonth -> "past"; selected > currentMonth -> "future"; else -> "current" })
+        val historical = reportMode == "consolidated" && expected.valuation == "historical"
+        if (historical) require(selected <= currentMonth) { "Исторический отчёт недоступен для будущего месяца" }
+        val conversionSnapshot = if (reportMode == "consolidated") {
+            require(currency == "KZT" && accountId == null)
+            requireNotNull(conversion) { "В общем отчёте отсутствуют курсы конвертации" }.toDomain(accountIds.isNotEmpty(), expected.valuation,
+                selected.minusMonths((months - 1).toLong()).atDay(1).minusDays(1).takeIf { historical },
+                minOf(selected.atEndOfMonth(), date).takeIf { historical })
+        } else {
+            require(conversion == null) { "Отчёт в исходной валюте не должен содержать конвертацию" }; null
+        }
         require(series.size == months)
-        val points = series.mapIndexed { index, row -> row.toDomain(selected.minusMonths((months - index - 1).toLong())) }
+        val points = series.mapIndexed { index, row -> row.toDomain(selected.minusMonths((months - index - 1).toLong()), date.takeIf { historical }) }
         points.zipWithNext().forEach { (left, right) -> require(left.closingBalanceMinor == right.openingBalanceMinor) }
+        if (historical) {
+            val boundaries = points.mapNotNull { it.valuationDate } + requireNotNull(points.first().openingValuationDate)
+            conversionSnapshot!!.rates.groupBy { it.currency }.values.forEach { rates ->
+                require(rates.mapNotNull { it.valuationDate }.containsAll(boundaries)) { "В отчёте отсутствуют курсы на границах месяцев" }
+            }
+        }
         val totals = summary.toDomain(); val latest = points.last(); val previous = points[points.lastIndex - 1]
         require(totals.incomeMinor == latest.incomeMinor && totals.expenseMinor == latest.expenseMinor && totals.netMinor == latest.netMinor)
         require(totals.previousIncomeMinor == previous.incomeMinor && totals.previousExpenseMinor == previous.expenseMinor && totals.previousNetMinor == previous.netMinor)
@@ -163,6 +217,7 @@ data class AdvancedAnalyticsReportDto(
 }
 
 private fun nonNegative(value: String): Long = parseServerMinor(value).also { require(it >= 0) }
+private fun exactDate(value: String): LocalDate = LocalDate.parse(value).also { require(it.toString() == value) }
 private fun difference(actual: Long, left: Long, right: Long) {
     require(BigInteger.valueOf(actual) == BigInteger.valueOf(left) - BigInteger.valueOf(right)) { "Итоги отчёта не согласованы" }
 }

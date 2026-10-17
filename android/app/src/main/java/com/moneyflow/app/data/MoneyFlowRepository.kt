@@ -613,7 +613,8 @@ class MoneyFlowRepository(
     suspend fun advancedAnalytics(filter: AdvancedAnalyticsFilter): CachedAdvancedAnalytics {
         filter.validate()
         val current = requireSession(); val revision = mutex.withLock { analyticsRevision }
-        val response = api.analyticsDashboard(filter.month, filter.currency, filter.months, filter.accountId, "Bearer ${current.token}", filter.mode)
+        val response = api.analyticsDashboard(filter.month, filter.currency, filter.months, filter.accountId, "Bearer ${current.token}", filter.mode,
+            filter.valuation.takeIf { filter.mode == "consolidated" })
         val result = CachedAdvancedAnalytics(response.toDomain(filter), Instant.now())
         mutex.withLock {
             check(isCurrentSession(current) && analyticsRevision == revision) { "Данные изменились; обновите отчёт" }
@@ -627,7 +628,12 @@ class MoneyFlowRepository(
 
     suspend fun cachedAdvancedAnalytics(filter: AdvancedAnalyticsFilter): CachedAdvancedAnalytics? {
         filter.validate(); val current = requireSession()
-        val row = dao.analyticsSnapshot(current.user.id, Gson().toJson(filter)) ?: return null
+        val row = dao.analyticsSnapshot(current.user.id, Gson().toJson(filter)) ?: run {
+            // Version 0.7 keys predate valuation. Historical reports must never use those snapshots.
+            if (filter.mode == "consolidated" && filter.valuation != "latest_snapshot") return null
+            val legacyKey = Gson().toJsonTree(filter).asJsonObject.apply { remove("valuation") }.toString()
+            dao.analyticsSnapshot(current.user.id, legacyKey) ?: return null
+        }
         check(isCurrentSession(current)) { "Сессия изменилась" }
         return runCatching {
             val report = Gson().fromJson(row.payload, AdvancedAnalyticsReportDto::class.java).toDomain(filter)

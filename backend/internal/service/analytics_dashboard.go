@@ -15,6 +15,7 @@ import (
 
 type AnalyticsDashboardFilter struct {
 	Mode      string
+	Valuation string
 	Month     string
 	Currency  string
 	Months    int
@@ -34,15 +35,19 @@ type AnalyticsComparison struct {
 }
 
 type AnalyticsSeriesPoint struct {
-	Month               string `json:"month"`
-	From                string `json:"from"`
-	To                  string `json:"to"`
-	IncomeMinor         string `json:"income_minor"`
-	ExpenseMinor        string `json:"expense_minor"`
-	NetMinor            string `json:"net_minor"`
-	OpeningBalanceMinor string `json:"opening_balance_minor"`
-	ClosingBalanceMinor string `json:"closing_balance_minor"`
-	LedgerChangeMinor   string `json:"ledger_change_minor"`
+	Month                      string `json:"month"`
+	From                       string `json:"from"`
+	To                         string `json:"to"`
+	IncomeMinor                string `json:"income_minor"`
+	ExpenseMinor               string `json:"expense_minor"`
+	NetMinor                   string `json:"net_minor"`
+	OpeningBalanceMinor        string `json:"opening_balance_minor"`
+	ClosingBalanceMinor        string `json:"closing_balance_minor"`
+	LedgerChangeMinor          string `json:"ledger_change_minor"`
+	OpeningValuationDate       string `json:"opening_valuation_date,omitempty"`
+	ValuationDate              string `json:"valuation_date,omitempty"`
+	ConvertedLedgerChangeMinor string `json:"converted_ledger_change_minor,omitempty"`
+	FXRevaluationMinor         string `json:"fx_revaluation_minor,omitempty"`
 }
 
 type AnalyticsComparisonBucket struct {
@@ -81,6 +86,17 @@ func dashboardPeriod(f AnalyticsDashboardFilter) (AnalyticsDashboardFilter, time
 	}
 	if f.Mode != "original" && f.Mode != "consolidated" {
 		return f, time.Time{}, time.Time{}, Invalid("Mode must be original or consolidated.")
+	}
+	if f.Mode == "original" && f.Valuation != "" {
+		return f, time.Time{}, time.Time{}, Invalid("Valuation applies only to consolidated reports.")
+	}
+	if f.Mode == "consolidated" {
+		if f.Valuation == "" {
+			f.Valuation = "latest_snapshot"
+		}
+		if f.Valuation != "latest_snapshot" && f.Valuation != "historical" {
+			return f, time.Time{}, time.Time{}, Invalid("Valuation must be historical or latest_snapshot.")
+		}
 	}
 	if f.Mode == "consolidated" && (f.Currency != "KZT" || f.AccountID != "") {
 		return f, time.Time{}, time.Time{}, Invalid("Consolidated reports require KZT and all accounts.")
@@ -156,6 +172,9 @@ func (s *Service) AnalyticsDashboard(ctx context.Context, userID string, filter 
 		return AnalyticsDashboardView{}, err
 	}
 	if f.Mode == "consolidated" {
+		if f.Valuation == "historical" {
+			return s.historicalAnalyticsDashboard(ctx, userID, f, start, end)
+		}
 		return s.consolidatedAnalyticsDashboard(ctx, userID, f, start, end)
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)

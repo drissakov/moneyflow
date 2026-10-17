@@ -144,7 +144,7 @@ class CategoryRepositoryTest {
     }
 
     private abstract inner class StubApi : MoneyFlowApi {
-        override suspend fun analyticsDashboard(month: String, currency: String, months: Int, accountId: String?, authorization: String, mode: String): AdvancedAnalyticsReportDto = error("Unused dashboard API")
+        override suspend fun analyticsDashboard(month: String, currency: String, months: Int, accountId: String?, authorization: String, mode: String, valuation: String?): AdvancedAnalyticsReportDto = error("Unused dashboard API")
         override suspend fun planning(from: String, to: String, authorization: String): PlanningResponseDto = error("Unused planning API")
         override suspend fun forecast(until: String?, authorization: String): ForecastResponseDto = error("Unused forecast API")
         override suspend fun login(credentials: Credentials): AuthResponse {

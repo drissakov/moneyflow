@@ -6,6 +6,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.math.BigDecimal
 import java.time.YearMonth
+import java.time.LocalDate
 import java.time.ZoneOffset
 
 class AdvancedAnalyticsModelsTest {
@@ -87,7 +88,7 @@ class AdvancedAnalyticsModelsTest {
 
     @Test fun consolidatedModeRequiresAnExplicitKztAllAccountSnapshotWithoutClientMoneyRounding() {
         val converted = fixture().copy(mode = "consolidated", conversion = conversion())
-        val report = converted.toDomain(filter.copy(mode = "consolidated"))
+        val report = converted.toDomain(filter.copy(mode = "consolidated", valuation = "latest_snapshot"))
         assertEquals("consolidated", report.mode)
         assertEquals(BigDecimal("489.12345678901234567890"), report.conversion!!.rates.last().rate)
         assertEquals(1250L, report.series.last().closingBalanceMinor)
@@ -128,7 +129,7 @@ class AdvancedAnalyticsModelsTest {
         }
         invalid.forEach { snapshot ->
             assertThrows(RuntimeException::class.java) {
-                fixture().copy(mode = "consolidated", conversion = snapshot).toDomain(filter.copy(mode = "consolidated"))
+                fixture().copy(mode = "consolidated", conversion = snapshot).toDomain(filter.copy(mode = "consolidated", valuation = "latest_snapshot"))
             }
         }
     }
@@ -142,6 +143,85 @@ class AdvancedAnalyticsModelsTest {
         assertThrows(IllegalArgumentException::class.java) { identity.copy(stale = true).toDomain(true) }
         assertThrows(IllegalArgumentException::class.java) { identity.copy(fetchedAt = "2026-10-17T09:00:00Z").toDomain(true) }
         assertTrue(conversion().copy(stale = true).toDomain(true).stale)
+    }
+
+    @Test fun historicalReportReconcilesDailyMoneyMovementAndMonthEndRevaluationWithoutClientConversion() {
+        val report = historicalFixture().toDomain(filter.copy(mode = "consolidated"))
+        assertEquals("historical", report.conversion!!.policy)
+        assertEquals("2026-07-31", report.conversion.fromDate)
+        assertEquals("2026-10-17", report.conversion.toDate)
+        assertEquals("2026-09-30", report.series.last().openingValuationDate)
+        assertEquals("2026-10-17", report.series.last().valuationDate)
+        assertEquals(100L, report.series.last().convertedLedgerChangeMinor)
+        assertEquals(-10L, report.series.last().fxRevaluationMinor)
+        assertEquals(90L, report.series.last().ledgerChangeMinor)
+        assertEquals(300L, report.summary.incomeMinor)
+        assertEquals(listOf("2026-07-31", "2026-08-31", "2026-09-30", "2026-10-17"), report.conversion.rates.map { it.valuationDate })
+        val roundTrip = Gson().fromJson(Gson().toJson(historicalFixture()), AdvancedAnalyticsReportDto::class.java)
+        assertEquals(report, roundTrip.toDomain(filter.copy(mode = "consolidated")))
+    }
+
+    @Test fun historicalAndLatestSnapshotsCannotMasqueradeAsEachOtherOrAcceptPartialBalanceMetadata() {
+        val historical = historicalFixture(); val expected = filter.copy(mode = "consolidated")
+        assertThrows(IllegalArgumentException::class.java) { historical.toDomain(expected.copy(valuation = "latest_snapshot")) }
+        assertThrows(IllegalArgumentException::class.java) { fixture().copy(mode = "consolidated", conversion = conversion()).toDomain(expected) }
+        listOf(
+            historical.series.last().copy(convertedLedgerChangeMinor = null),
+            historical.series.last().copy(fxRevaluationMinor = "-9"),
+            historical.series.last().copy(convertedLedgerChangeMinor = Long.MIN_VALUE.toString(), fxRevaluationMinor = "90"),
+            historical.series.last().copy(valuationDate = "2026-10-31"),
+            historical.series.last().copy(openingValuationDate = "2026-10-01"),
+        ).forEach { point ->
+            assertThrows(IllegalArgumentException::class.java) { historical.copy(series = historical.series.dropLast(1) + point).toDomain(expected) }
+        }
+        assertThrows(IllegalArgumentException::class.java) { expected.copy(valuation = "unknown").validate() }
+    }
+
+    @Test fun historicalQuotesRejectFutureOldMissingBoundaryDuplicateOrWrongPublicationDates() {
+        val base = historicalFixture(); val metadata = base.conversion!!; val rate = metadata.rates.last()
+        val expected = filter.copy(mode = "consolidated")
+        listOf(
+            metadata.copy(rates = metadata.rates.drop(1)),
+            metadata.copy(rates = metadata.rates.reversed()),
+            metadata.copy(rates = metadata.rates + rate),
+            metadata.copy(fromDate = "2026-08-01"), metadata.copy(toDate = "2026-10-31"), metadata.copy(maxAgeDays = 15),
+            metadata.copy(rates = metadata.rates.dropLast(1) + rate.copy(rateDate = "2026-10-18", targetRateDate = "2026-10-18")),
+            metadata.copy(rates = metadata.rates.dropLast(1) + rate.copy(rateDate = "2026-10-02", targetRateDate = "2026-10-02")),
+            metadata.copy(rates = metadata.rates.dropLast(1) + rate.copy(targetRateDate = null)),
+            metadata.copy(rates = metadata.rates.dropLast(1) + rate.copy(sourceRateDate = "2026-10-16")),
+            metadata.copy(rates = metadata.rates.dropLast(1) + rate.copy(currency = "EUR")),
+            metadata.copy(rates = metadata.rates.dropLast(1) + rate.copy(rateDate = "2026-10-17")),
+            metadata.copy(fetchedAt = null),
+        ).forEach { invalid -> assertThrows(RuntimeException::class.java) { base.copy(conversion = invalid).toDomain(expected) } }
+    }
+
+    @Test fun historicalCarryForwardAcceptsFourteenDaysAndTracksBothCrossRatePublicationDates() {
+        val from = LocalDate.parse("2026-10-01"); val to = LocalDate.parse("2026-10-17")
+        val rate = AdvancedAnalyticsRateDto("EUR", "500.125", "2026-10-03", "2026-10-17", "2026-10-03", "2026-10-16")
+        assertEquals("2026-10-03", rate.toDomain(from, to).rateDate)
+        assertEquals("2026-10-16", rate.toDomain(from, to).targetRateDate)
+        assertThrows(IllegalArgumentException::class.java) { rate.copy(rateDate = "2026-10-16").toDomain(from, to) }
+        assertThrows(IllegalArgumentException::class.java) { rate.copy(sourceRateDate = "2026-10-02", rateDate = "2026-10-02").toDomain(from, to) }
+    }
+
+    @Test fun historicalKztOnlyNeedsNoNetworkTimestampAndNeverFabricatesFutureRates() {
+        val base = historicalFixture(); val expected = filter.copy(mode = "consolidated")
+        val identity = base.conversion!!.copy(rates = emptyList(), fetchedAt = null)
+        assertTrue(base.copy(conversion = identity).toDomain(expected).conversion!!.rates.isEmpty())
+        assertThrows(IllegalArgumentException::class.java) { base.copy(conversion = identity.copy(stale = true)).toDomain(expected) }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(conversion = identity.copy(fetchedAt = base.asOf)).toDomain(expected) }
+        assertThrows(IllegalArgumentException::class.java) { base.copy(month = "2026-11", from = "2026-11-01T00:00:00+05:00", to = "2026-12-01T00:00:00+05:00", periodStatus = "future")
+            .toDomain(expected.copy(month = "2026-11")) }
+    }
+
+    private fun historicalFixture(): AdvancedAnalyticsReportDto {
+        val base = fixture()
+        val dates = listOf("2026-07-31", "2026-08-31", "2026-09-30", "2026-10-17")
+        return base.copy(mode = "consolidated", conversion = AdvancedAnalyticsConversionDto("historical", "Frankfurter", base.asOf, false,
+            dates.map { val observed = LocalDate.parse(it).minusDays(1).toString(); AdvancedAnalyticsRateDto("USD", "452.65", observed, it, null, observed) },
+            dates.first(), dates.last(), 14), series = base.series.mapIndexed { index, row -> row.copy(
+                openingValuationDate = dates[index], valuationDate = dates[index + 1],
+                convertedLedgerChangeMinor = if (index == 2) "100" else row.ledgerChangeMinor, fxRevaluationMinor = if (index == 2) "-10" else "0") })
     }
 
     private fun conversion() = AdvancedAnalyticsConversionDto("latest_snapshot", "Frankfurter", "2026-10-17T08:30:00Z", false,

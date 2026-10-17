@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.*
 import retrofit2.HttpException
 import java.io.IOException
 import java.time.Instant
+import java.time.YearMonth
 
 data class AdvancedAnalyticsUiState(
     val session: Session? = null,
@@ -20,6 +21,7 @@ data class AdvancedAnalyticsUiState(
     val months: Int = 6,
     val accountId: String? = null,
     val mode: String = "original",
+    val valuation: String = "historical",
     val accounts: List<Account> = emptyList(),
     val report: AdvancedAnalyticsReport? = null,
     val loading: Boolean = false,
@@ -27,7 +29,7 @@ data class AdvancedAnalyticsUiState(
     val receivedAt: Instant? = null,
     val error: String? = null,
 ) {
-    val filter: AdvancedAnalyticsFilter get() = AdvancedAnalyticsFilter(month, currency, months, accountId, mode)
+    val filter: AdvancedAnalyticsFilter get() = AdvancedAnalyticsFilter(month, currency, months, accountId, mode, valuation)
 }
 
 /** Read-only server reports. A filter or session change invalidates every older in-flight response. */
@@ -58,7 +60,8 @@ class AdvancedAnalyticsViewModel(private val repository: MoneyFlowRepository) : 
     fun setMonths(months: Int) = changeFilter(state.value.filter.copy(months = months))
     fun setMode(mode: String) = changeFilter(state.value.filter.let {
         if (mode == "consolidated") it.copy(mode = mode, currency = "KZT", accountId = null) else it.copy(mode = mode)
-    })
+    }.normalizeHistoricalMonth())
+    fun setValuation(valuation: String) = changeFilter(state.value.filter.copy(valuation = valuation).normalizeHistoricalMonth())
     fun setCurrency(currency: String) {
         val selected = state.value.accountId?.let { id -> state.value.accounts.firstOrNull { it.id == id } }
         changeFilter(state.value.filter.copy(currency = currency, accountId = selected?.takeIf { it.currency == currency }?.id))
@@ -71,8 +74,11 @@ class AdvancedAnalyticsViewModel(private val repository: MoneyFlowRepository) : 
     }
     private fun changeFilter(filter: AdvancedAnalyticsFilter) {
         try { filter.validate() } catch (error: Exception) { _state.update { it.copy(error = message(error)) }; return }
+        if (filter.mode == "consolidated" && filter.valuation == "historical" && YearMonth.parse(filter.month) > YearMonth.parse(PlanningCalendar.month())) {
+            _state.update { it.copy(error = "Исторические курсы доступны до текущего месяца") }; return
+        }
         if (filter == state.value.filter) return
-        _state.update { it.copy(month = filter.month, currency = filter.currency, months = filter.months, accountId = filter.accountId, mode = filter.mode,
+        _state.update { it.copy(month = filter.month, currency = filter.currency, months = filter.months, accountId = filter.accountId, mode = filter.mode, valuation = filter.valuation,
             report = null, receivedAt = null, offline = false, error = null) }
         load()
     }
@@ -136,3 +142,6 @@ class AdvancedAnalyticsViewModel(private val repository: MoneyFlowRepository) : 
         @Suppress("UNCHECKED_CAST") override fun <T : ViewModel> create(modelClass: Class<T>): T = AdvancedAnalyticsViewModel(repository) as T
     }
 }
+
+internal fun AdvancedAnalyticsFilter.normalizeHistoricalMonth(currentMonth: String = PlanningCalendar.month()): AdvancedAnalyticsFilter =
+    if (mode == "consolidated" && valuation == "historical" && YearMonth.parse(month) > YearMonth.parse(currentMonth)) copy(month = currentMonth) else this

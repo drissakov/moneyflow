@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -16,17 +17,36 @@ import (
 )
 
 type AnalyticsDashboardRate struct {
-	Currency string  `json:"currency"`
-	Rate     string  `json:"rate"`
-	RateDate *string `json:"rate_date"`
+	Currency       string  `json:"currency"`
+	Rate           string  `json:"rate"`
+	RateDate       *string `json:"rate_date"`
+	ValuationDate  string  `json:"valuation_date,omitempty"`
+	SourceRateDate *string `json:"source_rate_date,omitempty"`
+	TargetRateDate *string `json:"target_rate_date,omitempty"`
+}
+
+// Historical USD pairs expose an explicit null for the mathematical anchor's
+// observation date, without changing the response shape of older snapshots.
+func (r AnalyticsDashboardRate) MarshalJSON() ([]byte, error) {
+	type rateAlias AnalyticsDashboardRate
+	if r.ValuationDate == "" {
+		return json.Marshal(rateAlias(r))
+	}
+	return json.Marshal(struct {
+		rateAlias
+		SourceRateDate *string `json:"source_rate_date"`
+	}{rateAlias(r), r.SourceRateDate})
 }
 
 type AnalyticsDashboardConversion struct {
-	Policy    string                   `json:"policy"`
-	Provider  string                   `json:"provider"`
-	FetchedAt *time.Time               `json:"fetched_at"`
-	Stale     bool                     `json:"stale"`
-	Rates     []AnalyticsDashboardRate `json:"rates"`
+	Policy     string                   `json:"policy"`
+	Provider   string                   `json:"provider"`
+	FetchedAt  *time.Time               `json:"fetched_at"`
+	Stale      bool                     `json:"stale"`
+	Rates      []AnalyticsDashboardRate `json:"rates"`
+	FromDate   string                   `json:"from_date,omitempty"`
+	ToDate     string                   `json:"to_date,omitempty"`
+	MaxAgeDays int                      `json:"max_age_days,omitempty"`
 }
 
 var errDashboardNeedsFX = errors.New("dashboard needs an FX snapshot outside its ledger transaction")
