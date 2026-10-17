@@ -208,7 +208,18 @@ func (a *API) history(c *gin.Context) {
 		}
 		includeDeleted = parsed
 	}
-	view, err := a.service.History(c.Request.Context(), currentUser(c).ID, service.HistoryFilter{AccountID: c.Query("account_id"), Cursor: c.Query("cursor"), Query: c.Query("q"), From: c.Query("from"), To: c.Query("to"), CategoryID: c.Query("category_id"), Kind: c.Query("kind"), IncludeDeleted: includeDeleted, Limit: limit})
+	optionalFlags := map[string]bool{}
+	for _, name := range []string{"analytics_only", "uncategorized", "category_exact"} {
+		if value, exists := c.GetQuery(name); exists {
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				fail(c, 400, "invalid_request", name+" must be boolean.")
+				return
+			}
+			optionalFlags[name] = parsed
+		}
+	}
+	view, err := a.service.History(c.Request.Context(), currentUser(c).ID, service.HistoryFilter{AccountID: c.Query("account_id"), Cursor: c.Query("cursor"), Query: c.Query("q"), From: c.Query("from"), To: c.Query("to"), CategoryID: c.Query("category_id"), Kind: c.Query("kind"), IncludeDeleted: includeDeleted, Limit: limit, Currency: c.Query("currency"), AnalyticsOnly: optionalFlags["analytics_only"], Uncategorized: optionalFlags["uncategorized"], CategoryExact: optionalFlags["category_exact"]})
 	if err != nil {
 		a.respondError(c, err)
 		return

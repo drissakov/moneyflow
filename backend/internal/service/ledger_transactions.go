@@ -23,6 +23,10 @@ type HistoryFilter struct {
 	Kind           string `json:"kind"`
 	IncludeDeleted bool   `json:"include_deleted"`
 	Limit          int    `json:"limit"`
+	Currency       string `json:"currency,omitempty"`
+	AnalyticsOnly  bool   `json:"analytics_only,omitempty"`
+	Uncategorized  bool   `json:"uncategorized,omitempty"`
+	CategoryExact  bool   `json:"category_exact,omitempty"`
 }
 type historyCursor struct {
 	OccurredAt time.Time `json:"o"`
@@ -37,6 +41,20 @@ type HistoryView struct {
 
 func validateHistoryFilter(f HistoryFilter) (HistoryFilter, error) {
 	var err error
+	if f.Currency != "" {
+		if err := ValidateCurrency(f.Currency); err != nil {
+			return f, err
+		}
+	}
+	if f.AnalyticsOnly && f.IncludeDeleted {
+		return f, Invalid("Analytics_only cannot include deleted transactions.")
+	}
+	if f.Uncategorized && (f.CategoryID != "" || f.CategoryExact) {
+		return f, Invalid("Uncategorized cannot be combined with a category filter.")
+	}
+	if f.CategoryExact && f.CategoryID == "" {
+		return f, Invalid("Category_exact requires category_id.")
+	}
 	if f.AccountID != "" {
 		f.AccountID, err = ParseID(f.AccountID)
 		if err != nil {
@@ -84,12 +102,14 @@ func (s *Service) History(ctx context.Context, userID string, f HistoryFilter) (
 	}
 	db := s.DB.WithContext(ctx)
 	if f.AccountID != "" {
-		var n int64
-		if err := db.Model(&model.Account{}).Where("id=? AND user_id=?", f.AccountID, userID).Count(&n).Error; err != nil {
+		var account model.Account
+		if err := db.Select("id,currency").Where("id=? AND user_id=?", f.AccountID, userID).First(&account).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+			return view, NotFound
+		} else if err != nil {
 			return view, err
 		}
-		if n == 0 {
-			return view, NotFound
+		if f.Currency != "" && f.Currency != account.Currency {
+			return view, Invalid("Selected account currency must match the report currency.")
 		}
 	}
 	if f.CategoryID != "" {
@@ -107,8 +127,21 @@ func (s *Service) History(ctx context.Context, userID string, f HistoryFilter) (
 	if f.Kind != "" {
 		query = query.Where("transactions.kind=?", f.Kind)
 	}
+	if f.Currency != "" {
+		query = query.Where("transactions.currency=?", f.Currency)
+	}
+	if f.AnalyticsOnly {
+		query = query.Where("NOT transactions.exclude_from_analytics")
+	}
+	if f.Uncategorized {
+		query = query.Where("transactions.category_id IS NULL")
+	}
 	if f.CategoryID != "" {
-		query = query.Where("transactions.category_id IN (SELECT id FROM categories WHERE id=? OR parent_id=?)", f.CategoryID, f.CategoryID)
+		if f.CategoryExact {
+			query = query.Where("transactions.category_id=?", f.CategoryID)
+		} else {
+			query = query.Where("transactions.category_id IN (SELECT id FROM categories WHERE id=? OR parent_id=?)", f.CategoryID, f.CategoryID)
+		}
 	}
 	if f.From != "" {
 		query = query.Where("transactions.occurred_at>=?", f.From)

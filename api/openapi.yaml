@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: MoneyFlow API
-  version: 0.5.0
+  version: 0.5.1
   description: |
     Android MVP API. PostgreSQL is the authoritative store. All authenticated
     reads and writes are scoped to the authenticated user; a client cannot send
@@ -298,6 +298,33 @@ paths:
           minimum: 1
           maximum: 100
           default: 50
+      - name: currency
+        in: query
+        required: false
+        schema:
+          $ref: '#/components/schemas/Currency'
+        description: Original currency filter; a selected account must match.
+      - name: analytics_only
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+        description: 'Only chart facts: excludes excluded movements/principal; include_deleted=true conflicts400.'
+      - name: uncategorized
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+        description: Only category_id IS NULL. Conflicts with category_id/category_exact.
+      - name: category_exact
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+        description: Require category_id and select only exact assignment; default root includes descendants.
       responses:
         '200':
           description: History page; next_cursor null means complete.
@@ -1775,6 +1802,85 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/OccurrencePostCommand'
+  /api/v1/analytics/dashboard:
+    get:
+      tags:
+      - Analytics
+      operationId: analyticsDashboard
+      summary: Compare monthly income, expenses, categories and reconstructed ledger balances
+      description: 'Returns exactly3,6 or12 zero-filled calendar months ending at month. Boundaries use fixedUTC+5,
+        including stored future-dated confirmed transactions. Current-month comparisons are full calendar ranges;
+        period_status explicitly identifies current/future reports. Original currency only; no historical or current
+        FX is requested. No account_id means ALL owned accounts in this currency, including archived and excluded-from-portfolio
+        accounts. A selected account must be owned and match currency.
+
+
+        One read-only repeatable-read transaction keeps scope, series and category facts coherent. Income/expense/net
+        and category totals exclude deleted and exclude_from_analytics entries, so own-account movements/principal
+        do not count and fees do. Balances include all nondeleted ledger movements/principal. Opening balance uses
+        current opening baselines plus ALL recorded history before the chart boundary; account created_at does not
+        discard backdated imported history. Opening baselines have no effective date, so balances reconstruct stored
+        history rather than certify bank snapshots. ledger_change_minor can differ from net_minor. Current account
+        opening-balance edits restate historical reconstructed balances.
+
+
+        Categories are the union of selected and previous month, including zero-current prior-only buckets. Parent
+        amount_minor equals its direct_amount_minor plus current children totals. Use GET/transactions with the same
+        currency, account_id (if selected), kind, from/to and analytics_only=true; category_id includes subtree, category_exact=true
+        selects direct root entries, uncategorized=true selects null categories. All output amounts and derived deltas/balances
+        must fit signed64; overflow returns409.'
+      parameters:
+      - name: month
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[0-9]{4}-(0[1-9]|1[0-2])$
+        description: Selected YYYY-MM in1901..2199.
+      - name: currency
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/Currency'
+      - name: months
+        in: query
+        required: false
+        schema:
+          type: integer
+          enum:
+          - 3
+          - 6
+          - 12
+          default: 6
+      - name: account_id
+        in: query
+        required: false
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Coherent original-currency report with fixed-month series. from inclusive, to exclusive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsDashboard'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 'analytics_overflow: a total, derived difference or reconstructed balance exceeds signed64.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '504':
+          $ref: '#/components/responses/RequestTimeout'
 components:
   parameters:
     StatementImportID:
@@ -3639,3 +3745,215 @@ components:
           format: date
         timeline_truncated:
           type: boolean
+
+    AnalyticsComparisonSummary:
+      type: object
+      additionalProperties: false
+      required:
+      - income_minor
+      - expense_minor
+      - net_minor
+      - previous_income_minor
+      - previous_expense_minor
+      - previous_net_minor
+      - income_delta_minor
+      - expense_delta_minor
+      - net_delta_minor
+      properties:
+        income_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        expense_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        net_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        previous_income_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        previous_expense_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        previous_net_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        income_delta_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        expense_delta_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        net_delta_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+    AnalyticsSeriesPoint:
+      type: object
+      additionalProperties: false
+      required:
+      - month
+      - from
+      - to
+      - income_minor
+      - expense_minor
+      - net_minor
+      - opening_balance_minor
+      - closing_balance_minor
+      - ledger_change_minor
+      properties:
+        month:
+          type: string
+          pattern: ^[0-9]{4}-(0[1-9]|1[0-2])$
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        income_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        expense_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        net_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        opening_balance_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        closing_balance_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        ledger_change_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+    AnalyticsComparisonBucket:
+      type: object
+      additionalProperties: false
+      required:
+      - category_id
+      - name
+      - amount_minor
+      - direct_amount_minor
+      - previous_amount_minor
+      - delta_minor
+      - children
+      properties:
+        category_id:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+        amount_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        direct_amount_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        previous_amount_minor:
+          type: string
+          pattern: ^(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        delta_minor:
+          type: string
+          pattern: ^-?(0|[1-9][0-9]*)$
+          description: Canonical signed64 integer minor units; derived values never wrap.
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsComparisonBucket'
+    AnalyticsDashboard:
+      type: object
+      additionalProperties: false
+      required:
+      - month
+      - currency
+      - timezone
+      - months
+      - account_id
+      - account_ids
+      - from
+      - to
+      - as_of
+      - today
+      - period_status
+      - summary
+      - series
+      - income
+      - expenses
+      properties:
+        month:
+          type: string
+          pattern: ^[0-9]{4}-(0[1-9]|1[0-2])$
+        currency:
+          $ref: '#/components/schemas/Currency'
+        timezone:
+          type: string
+          enum:
+          - UTC+05:00
+        months:
+          type: integer
+          enum:
+          - 3
+          - 6
+          - 12
+        account_id:
+          type: string
+          format: uuid
+          nullable: true
+        account_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        as_of:
+          type: string
+          format: date-time
+        today:
+          type: string
+          format: date
+        period_status:
+          type: string
+          enum:
+          - past
+          - current
+          - future
+        summary:
+          $ref: '#/components/schemas/AnalyticsComparisonSummary'
+        series:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsSeriesPoint'
+        income:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsComparisonBucket'
+        expenses:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalyticsComparisonBucket'

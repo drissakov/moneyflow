@@ -80,6 +80,7 @@ func New(s *service.Service, opts Options) (*gin.Engine, error) {
 	private.GET("/categories", a.categories)
 	private.POST("/categories", a.createCategory)
 	private.GET("/analytics", a.analytics)
+	private.GET("/analytics/dashboard", a.analyticsDashboard)
 	private.GET("/currencies", a.currencies)
 	private.GET("/preferences", a.preferences)
 	private.PUT("/preferences", a.setPreferences)
