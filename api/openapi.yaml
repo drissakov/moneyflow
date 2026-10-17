@@ -1810,12 +1810,22 @@ paths:
       summary: Compare monthly income, expenses, categories and reconstructed ledger balances
       description: 'Returns exactly3,6 or12 zero-filled calendar months ending at month. Boundaries use fixedUTC+5,
         including stored future-dated confirmed transactions. Current-month comparisons are full calendar ranges;
-        period_status explicitly identifies current/future reports. Original currency only; no historical or current
-        FX is requested. No account_id means ALL owned accounts in this currency, including archived and excluded-from-portfolio
-        accounts. A selected account must be owned and match currency.
+        period_status explicitly identifies current/future reports. mode=original (the default) reports one original
+        currency without requesting FX. No account_id means ALL owned accounts in that currency, including archived
+        and excluded-from-portfolio accounts. A selected account must be owned and match currency. mode=consolidated
+        requires currency=KZT and no account_id; it includes ALL owner accounts in every currency, including archived
+        and excluded-from-portfolio accounts. Consolidated amounts use one latest available Frankfurter snapshot for
+        the entire chart, not historical exchange rates or bank settlement rates. conversion lists the exact unique
+        account currency set and its displayed major-unit rates to KZT; calculations use exact rational rates before
+        half-even rounding. Each income/expense fact is converted once before monthly and category aggregation. Each
+        account native boundary balance is converted once before summing; ledger_change_minor is closing minus opening
+        and may differ from converted facts because of transfers, fees, exclusions and rounding. No partial report is
+        returned if any required pair is missing: 503 rates_unavailable. Usable stale snapshots are explicitly marked.
+        An empty or KZT-only scope skips FX fetching and returns null fetched_at, stale=false and identity rates only.
 
 
-        One read-only repeatable-read transaction keeps scope, series and category facts coherent. Income/expense/net
+        One read-only repeatable-read transaction keeps scope, series and category facts coherent; any FX cache refresh
+        occurs outside that ledger transaction. Income/expense/net
         and category totals exclude deleted and exclude_from_analytics entries, so own-account movements/principal
         do not count and fees do. Balances include all nondeleted ledger movements/principal. Opening balance uses
         current opening baselines plus ALL recorded history before the chart boundary; account created_at does not
@@ -1827,9 +1837,17 @@ paths:
         Categories are the union of selected and previous month, including zero-current prior-only buckets. Parent
         amount_minor equals its direct_amount_minor plus current children totals. Use GET/transactions with the same
         currency, account_id (if selected), kind, from/to and analytics_only=true; category_id includes subtree, category_exact=true
-        selects direct root entries, uncategorized=true selects null categories. All output amounts and derived deltas/balances
+        selects direct root entries, uncategorized=true selects null categories. Consolidated drilldown omits currency
+        and account_id, so original native transaction amounts remain visible across all accounts. All output amounts and derived deltas/balances
         must fit signed64; overflow returns409.'
       parameters:
+      - name: mode
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: [original, consolidated]
+          default: original
       - name: month
         in: query
         required: true
@@ -1860,7 +1878,7 @@ paths:
           format: uuid
       responses:
         '200':
-          description: Coherent original-currency report with fixed-month series. from inclusive, to exclusive.
+          description: Coherent original-currency or consolidated KZT report with fixed-month series. from inclusive, to exclusive.
           content:
             application/json:
               schema:
@@ -1877,6 +1895,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/RatesUnavailable'
         '500':
           $ref: '#/components/responses/InternalError'
         '504':
@@ -3881,10 +3901,49 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AnalyticsComparisonBucket'
+    AnalyticsDashboardRate:
+      type: object
+      additionalProperties: false
+      required: [currency, rate, rate_date]
+      properties:
+        currency:
+          $ref: '#/components/schemas/Currency'
+        rate:
+          type: string
+          description: Displayed major KZT units per one major currency unit; calculations use the unrounded exact cross rate.
+          pattern: '^[0-9]+(\.[0-9]+)?$'
+        rate_date:
+          type: string
+          format: date
+          nullable: true
+          description: Older contributing anchor observation date; null for identity KZT.
+    AnalyticsDashboardConversion:
+      type: object
+      additionalProperties: false
+      required: [policy, provider, fetched_at, stale, rates]
+      properties:
+        policy:
+          type: string
+          enum: [latest_snapshot]
+        provider:
+          type: string
+          enum: [Frankfurter]
+        fetched_at:
+          type: string
+          format: date-time
+          nullable: true
+        stale:
+          type: boolean
+        rates:
+          type: array
+          description: Unique account currencies sorted by code, including KZT identity if a KZT account exists.
+          items:
+            $ref: '#/components/schemas/AnalyticsDashboardRate'
     AnalyticsDashboard:
       type: object
       additionalProperties: false
       required:
+      - mode
       - month
       - currency
       - timezone
@@ -3901,6 +3960,11 @@ components:
       - income
       - expenses
       properties:
+        mode:
+          type: string
+          enum: [original, consolidated]
+        conversion:
+          $ref: '#/components/schemas/AnalyticsDashboardConversion'
         month:
           type: string
           pattern: ^[0-9]{4}-(0[1-9]|1[0-2])$

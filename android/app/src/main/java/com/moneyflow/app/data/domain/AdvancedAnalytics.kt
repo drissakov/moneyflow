@@ -10,12 +10,17 @@ data class AdvancedAnalyticsFilter(
     val currency: String = "KZT",
     val months: Int = 6,
     val accountId: String? = null,
+    val mode: String = "original",
 ) {
     fun validate() {
         require(month.matches(Regex("\\d{4}-\\d{2}"))) { "Выберите корректный месяц" }
         require(YearMonth.parse(month).year in 1901..2199) { "Год должен быть между 1901 и 2199" }
         SupportedCurrency.fromCode(currency)
         require(months in setOf(3, 6, 12)) { "Выберите период: 3, 6 или 12 месяцев" }
+        require(mode in setOf("original", "consolidated")) { "Выберите корректный режим отчёта" }
+        require(mode != "consolidated" || (currency == "KZT" && accountId == null)) {
+            "Общий отчёт доступен в тенге для всех счетов"
+        }
         accountId?.let { require(UUID.fromString(it).toString().equals(it, ignoreCase = true)) { "Выберите корректный счёт" } }
     }
 }
@@ -45,10 +50,20 @@ data class AnalyticsMonthPoint(
     val openingBalanceMinor: Long, val closingBalanceMinor: Long, val ledgerChangeMinor: Long,
 )
 
+/** Rates describe the server's single valuation snapshot; the client never recalculates report money. */
+data class AdvancedAnalyticsRate(val currency: String, val rate: BigDecimal, val rateDate: String?)
+
+data class AdvancedAnalyticsConversion(
+    val policy: String, val provider: String, val fetchedAt: String?, val stale: Boolean,
+    val rates: List<AdvancedAnalyticsRate>,
+)
+
 data class AdvancedAnalyticsReport(
     val month: String, val currency: String, val timezone: String, val months: Int,
     val accountId: String?, val accountIds: List<String>,
     val from: String, val to: String, val asOf: String, val today: String, val periodStatus: String,
     val summary: AdvancedAnalyticsSummary, val series: List<AnalyticsMonthPoint>,
     val income: List<AdvancedAnalyticsCategory>, val expenses: List<AdvancedAnalyticsCategory>,
+    val mode: String = "original",
+    val conversion: AdvancedAnalyticsConversion? = null,
 )

@@ -131,6 +131,7 @@ interface MoneyFlowApi {
         @Query("months") months: Int,
         @Query("account_id") accountId: String?,
         @Header("Authorization") authorization: String,
+        @Query("mode") mode: String = "original",
     ): AdvancedAnalyticsReportDto
     @GET("api/v1/planning") suspend fun planning(
         @Query("from") from: String,

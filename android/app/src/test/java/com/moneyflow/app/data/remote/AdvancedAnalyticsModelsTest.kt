@@ -85,6 +85,68 @@ class AdvancedAnalyticsModelsTest {
         assertThrows(IllegalArgumentException::class.java) { LedgerFilter(currency = "ZZZ").validate() }
     }
 
+    @Test fun consolidatedModeRequiresAnExplicitKztAllAccountSnapshotWithoutClientMoneyRounding() {
+        val converted = fixture().copy(mode = "consolidated", conversion = conversion())
+        val report = converted.toDomain(filter.copy(mode = "consolidated"))
+        assertEquals("consolidated", report.mode)
+        assertEquals(BigDecimal("489.12345678901234567890"), report.conversion!!.rates.last().rate)
+        assertEquals(1250L, report.series.last().closingBalanceMinor)
+        assertEquals("latest_snapshot", report.conversion.policy)
+        assertThrows(IllegalArgumentException::class.java) { converted.toDomain(filter) }
+        assertThrows(IllegalArgumentException::class.java) { fixture().toDomain(filter.copy(mode = "consolidated")) }
+        assertThrows(IllegalArgumentException::class.java) { converted.copy(conversion = null).toDomain(filter.copy(mode = "consolidated")) }
+        assertThrows(IllegalArgumentException::class.java) { filter.copy(mode = "consolidated", currency = "USD").validate() }
+        assertThrows(IllegalArgumentException::class.java) { filter.copy(mode = "consolidated", accountId = account).validate() }
+        assertThrows(IllegalArgumentException::class.java) { filter.copy(mode = "unknown").validate() }
+    }
+
+    @Test fun originalReportsRemainCompatibleWithOlderJsonAndRejectUnexpectedConversion() {
+        val gson = Gson()
+        val oldJson = gson.toJsonTree(fixture()).asJsonObject.apply { remove("mode"); remove("conversion") }
+        val oldReport = gson.fromJson(oldJson, AdvancedAnalyticsReportDto::class.java).toDomain(filter)
+        assertEquals("original", oldReport.mode)
+        assertNull(oldReport.conversion)
+        assertEquals("original", fixture().copy(mode = "original").toDomain(filter).mode)
+        assertThrows(IllegalArgumentException::class.java) { fixture().copy(conversion = conversion()).toDomain(filter) }
+        assertThrows(IllegalArgumentException::class.java) { fixture().copy(mode = "surprise").toDomain(filter) }
+    }
+
+    @Test fun conversionRejectsUnsortedDuplicateUnsupportedOrImpreciseRatesAndUnstampedForeignSnapshots() {
+        val base = conversion()
+        val invalid = listOf(
+            base.copy(policy = "historical"), base.copy(provider = "Unknown"),
+            base.copy(rates = base.rates.reversed()), base.copy(rates = base.rates + base.rates.last()),
+            base.copy(rates = listOf(AdvancedAnalyticsRateDto("ZZZ", "1", "2026-10-16"))),
+            base.copy(rates = listOf(AdvancedAnalyticsRateDto("KZT", "2", null))),
+            base.copy(rates = listOf(AdvancedAnalyticsRateDto("KZT", "1", "2026-10-16"))),
+            base.copy(fetchedAt = null), base.copy(fetchedAt = "not-an-instant"),
+            base.copy(rates = listOf(AdvancedAnalyticsRateDto("USD", "1", null))),
+            base.copy(rates = listOf(AdvancedAnalyticsRateDto("USD", "1", "2026-02-30"))),
+            base.copy(rates = emptyList()),
+        ) + listOf("0", "-1", "1e2", "NaN", "01.5", "0." + "1".repeat(1025), "9".repeat(2049)).map {
+            base.copy(rates = listOf(AdvancedAnalyticsRateDto("USD", it, "2026-10-16")))
+        }
+        invalid.forEach { snapshot ->
+            assertThrows(RuntimeException::class.java) {
+                fixture().copy(mode = "consolidated", conversion = snapshot).toDomain(filter.copy(mode = "consolidated"))
+            }
+        }
+    }
+
+    @Test fun identityAndEmptyConsolidatedReportsNeedNoRemoteFetchAndStaleForeignRatesRemainExplicit() {
+        val identity = AdvancedAnalyticsConversionDto("latest_snapshot", "Frankfurter", null, false,
+            listOf(AdvancedAnalyticsRateDto("KZT", "1", null)))
+        assertNull(identity.toDomain(true).fetchedAt)
+        assertTrue(identity.copy(rates = emptyList()).toDomain(false).rates.isEmpty())
+        assertThrows(IllegalArgumentException::class.java) { identity.toDomain(false) }
+        assertThrows(IllegalArgumentException::class.java) { identity.copy(stale = true).toDomain(true) }
+        assertThrows(IllegalArgumentException::class.java) { identity.copy(fetchedAt = "2026-10-17T09:00:00Z").toDomain(true) }
+        assertTrue(conversion().copy(stale = true).toDomain(true).stale)
+    }
+
+    private fun conversion() = AdvancedAnalyticsConversionDto("latest_snapshot", "Frankfurter", "2026-10-17T08:30:00Z", false,
+        listOf(AdvancedAnalyticsRateDto("KZT", "1", null), AdvancedAnalyticsRateDto("USD", "489.12345678901234567890", "2026-10-16")))
+
     private fun fixture(): AdvancedAnalyticsReportDto {
         val offset = ZoneOffset.ofHours(5)
         fun bounds(month: String): Pair<String, String> { val parsed = YearMonth.parse(month); return "${parsed.atDay(1)}T00:00:00+05:00" to "${parsed.plusMonths(1).atDay(1)}T00:00:00+05:00" }

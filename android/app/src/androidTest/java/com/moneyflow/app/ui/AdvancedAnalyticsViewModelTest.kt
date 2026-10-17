@@ -71,6 +71,45 @@ class AdvancedAnalyticsViewModelTest {
         }
     }
 
+    @Test fun consolidatedModeNormalizesScopeWinsTheOldRequestRaceAndUsesOnlyItsOwnOfflineSnapshot() = runBlocking {
+        Fixture().use { fixture ->
+            fixture.awaitReady()
+            val selected = fixture.vm.state.value.month
+            fixture.main { fixture.vm.setAccount(AdvancedAnalyticsTestFixtures.ACCOUNT) }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || fixture.vm.state.value.report?.accountId == null) delay(10) }
+            fixture.main { fixture.vm.setCurrency("USD") }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || fixture.vm.state.value.report?.currency != "USD") delay(10) }
+            fixture.holdNext.set(true)
+            val previous = YearMonth.parse(selected).minusMonths(1).toString()
+            fixture.main { fixture.vm.setMonth(previous) }
+            assertTrue(withContext(Dispatchers.IO) { fixture.entered.await(5, TimeUnit.SECONDS) })
+            fixture.main { fixture.vm.setMode("consolidated") }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || fixture.vm.state.value.report?.mode != "consolidated") delay(10) }
+            assertEquals("KZT", fixture.vm.state.value.currency)
+            assertNull(fixture.vm.state.value.accountId)
+            assertEquals("consolidated", fixture.vm.state.value.filter.mode)
+            assertNotNull(fixture.vm.state.value.report?.conversion)
+            fixture.release.countDown()
+            assertTrue(withContext(Dispatchers.IO) { fixture.released.await(5, TimeUnit.SECONDS) })
+            assertEquals("consolidated", fixture.vm.state.value.report?.mode)
+            fixture.status.set(503)
+            fixture.main { fixture.vm.refresh() }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading || !fixture.vm.state.value.offline) delay(10) }
+            assertEquals("consolidated", fixture.vm.state.value.report?.mode)
+            assertTrue(fixture.vm.state.value.error.orEmpty().contains("Курсы валют"))
+            fixture.main { fixture.vm.setMode("original") }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading) delay(10) }
+            assertNull(fixture.vm.state.value.report) // There was never a native KZT snapshot for this prior month.
+            assertEquals("original", fixture.vm.state.value.mode)
+            fixture.main { fixture.vm.setMonth(selected) }
+            withTimeout(10_000) { while (fixture.vm.state.value.loading) delay(10) }
+            assertEquals("original", fixture.vm.state.value.report?.mode)
+            assertNull(fixture.vm.state.value.report?.conversion)
+            assertTrue(fixture.vm.state.value.offline)
+            assertTrue(fixture.methods.all { it == "GET" })
+        }
+    }
+
     private inner class Fixture : AutoCloseable {
         private val instrumentation = InstrumentationRegistry.getInstrumentation()
         private val user = "a4444444-4444-4444-8444-444444444444"
@@ -101,7 +140,8 @@ class AdvancedAnalyticsViewModelTest {
                     if (code != 200) return json("""{"error":{"code":"${if (code == 401) "unauthorized" else "unavailable"}","message":"Unavailable"}}""").setResponseCode(code)
                     val url = requireNotNull(request.requestUrl)
                     return json(AdvancedAnalyticsTestFixtures.report(requireNotNull(url.queryParameter("month")), requireNotNull(url.queryParameter("currency")),
-                        requireNotNull(url.queryParameter("months")).toInt(), url.queryParameter("account_id")))
+                        requireNotNull(url.queryParameter("months")).toInt(), url.queryParameter("account_id"),
+                        mode = url.queryParameter("mode") ?: "original"))
                 }
             }
             server.start()

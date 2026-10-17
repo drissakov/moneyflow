@@ -78,6 +78,48 @@ class AdvancedAnalyticsRepositoryTest {
         }
     }
 
+    @Test fun consolidatedAndOriginalKztCacheEntriesNeverReplaceEachOtherAndLogoutClearsBoth() = runBlocking {
+        Fixture().use { fixture ->
+            val consolidated = filter.copy(mode = "consolidated")
+            fixture.server.enqueue(json(AdvancedAnalyticsTestFixtures.report(filter.month)))
+            val original = fixture.repo.advancedAnalytics(filter)
+            assertNull(fixture.repo.cachedAdvancedAnalytics(consolidated))
+            fixture.server.enqueue(json(AdvancedAnalyticsTestFixtures.report(filter.month, mode = "consolidated")))
+            val converted = fixture.repo.advancedAnalytics(consolidated)
+            assertEquals("consolidated", converted.report.mode)
+            assertNotNull(converted.report.conversion)
+            assertEquals(original.report, fixture.repo.cachedAdvancedAnalytics(filter)?.report)
+            assertEquals(converted.report, fixture.repo.cachedAdvancedAnalytics(consolidated)?.report)
+            val nativeRequest = fixture.server.takeRequest(1, TimeUnit.SECONDS)!!
+            val convertedRequest = fixture.server.takeRequest(1, TimeUnit.SECONDS)!!
+            assertEquals("original", nativeRequest.requestUrl?.queryParameter("mode"))
+            assertEquals("consolidated", convertedRequest.requestUrl?.queryParameter("mode"))
+            assertNull(convertedRequest.requestUrl?.queryParameter("account_id"))
+            assertEquals("KZT", convertedRequest.requestUrl?.queryParameter("currency"))
+            fixture.server.enqueue(json("""{"error":{"code":"exchange_rates_unavailable","message":"Unavailable"}}""").setResponseCode(503))
+            try { fixture.repo.advancedAnalytics(consolidated); fail("Expected rates unavailable") } catch (_: HttpException) { }
+            assertEquals(converted.report, fixture.repo.cachedAdvancedAnalytics(consolidated)?.report)
+            fixture.repo.expireSession(fixture.repo.session.value)
+            assertNull(fixture.db.dao().analyticsSnapshot(user, Gson().toJson(filter)))
+            assertNull(fixture.db.dao().analyticsSnapshot(user, Gson().toJson(consolidated)))
+        }
+    }
+
+    @Test fun missingOrMismatchedConversionMetadataCannotReplaceACachedConsolidatedReport() = runBlocking {
+        Fixture().use { fixture ->
+            val consolidated = filter.copy(mode = "consolidated")
+            fixture.server.enqueue(json(AdvancedAnalyticsTestFixtures.report(filter.month, mode = "consolidated")))
+            val valid = fixture.repo.advancedAnalytics(consolidated)
+            val noMetadata = JsonParser.parseString(AdvancedAnalyticsTestFixtures.report(filter.month, mode = "consolidated")).asJsonObject.apply { remove("conversion") }
+            listOf(AdvancedAnalyticsTestFixtures.report(filter.month), noMetadata.toString()).forEach { payload ->
+                fixture.server.enqueue(json(payload))
+                try { fixture.repo.advancedAnalytics(consolidated); fail("Incomplete or mismatched report must be rejected") } catch (_: IllegalArgumentException) { }
+                assertEquals(valid.report, fixture.repo.cachedAdvancedAnalytics(consolidated)?.report)
+            }
+            assertNull(fixture.repo.cachedAdvancedAnalytics(filter))
+        }
+    }
+
     @Test fun ignoredDrillDownFiltersAreRejectedInsteadOfCachingUnreconciledTransactions() = runBlocking {
         Fixture().use { fixture ->
             val exact = LedgerFilter(currency = "KZT", analyticsOnly = true, categoryId = category, categoryExact = true, kind = "expense")

@@ -6,7 +6,7 @@ The app has Russian UI and supports 11 curated currencies: KZT, USD, EUR, JPY,
 KWD, RUB, GBP, CHF, AUD, CAD and CNY. This is the application's supported catalog,
 not the full upstream provider catalog.
 
-Version 0.6.0 uses a monochrome Material 3 palette in both system light and dark
+Version 0.7.0 uses a monochrome Material 3 palette in both system light and dark
 themes. The aggregate balance of all accounts leads the overview, valued in KZT
 by default; changing the selected account only changes its transaction list.
 Individual accounts show their original and converted balances; calculation
@@ -63,21 +63,27 @@ need the updated API, with no additional server migration beyond 006.
 
 ## Advanced reports (P1)
 
-Reports has Comparison, Balance and Categories modes with shared month, original
-currency and optional single-account filters. Comparison and balance cover 3, 6
+Reports has Comparison, Balance and Categories tabs. Original mode has shared
+month, currency and optional single-account filters. Consolidated mode includes
+all currencies and all accounts (including archived/hidden), valued in KZT using
+one current Frankfurter snapshot for the full period. Quote dates, retrieval time
+and stale state are visible; missing required quotes suppress the entire report. Comparison and balance cover 3, 6
 or 12 months; month boundaries are fixed to Kazakhstan UTC+5. Filled/hatched bars
 and textual rows distinguish income and expense in both monochrome themes.
 
 Balances are reconstructed from current opening balances and the whole saved
 ledger, including history before the visible window. Transfers and excluded
 movements affect balances; income/expense excludes them and includes transfer
-fees. No historical FX valuation is invented. Current months are marked as
+fees. Historical daily FX valuation is not calculated; changing current rates can
+revalue the complete consolidated series. Current months are marked as
 unfinished and include already-recorded future-dated transactions; unconfirmed
 plans do not count.
 
 Category, subcategory, direct-parent and uncategorized actions open the ledger
-with matching currency/account/kind/date and analytics-only filters. Returning to
-Reports restores its mode/selection. Offline snapshots are read-only and labeled
+with matching kind/date and analytics-only filters. Original mode also retains
+currency/account. Consolidated drilldown includes all currencies and labels
+ledger amounts as original, while converted amounts remain in the report. Returning to
+Reports restores its mode/selection. Cache keys include the conversion mode. Offline snapshots are read-only and labeled
 with their receipt time. See [calculation rules and QA](../docs/ANALYTICS.md).
 
 ## Planning (P1)

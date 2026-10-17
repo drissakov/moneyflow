@@ -1,8 +1,10 @@
 package com.moneyflow.app.ui
 
 import com.moneyflow.app.data.domain.AdvancedAnalyticsCategory
+import com.moneyflow.app.data.domain.AdvancedAnalyticsRate
 import org.junit.Assert.*
 import org.junit.Test
+import java.math.BigDecimal
 import java.time.YearMonth
 
 class AdvancedAnalyticsPresentationTest {
@@ -47,5 +49,50 @@ class AdvancedAnalyticsPresentationTest {
         assertTrue(none.uncategorized)
         assertFalse(none.categoryExact)
         none.validate()
+    }
+
+    @Test fun consolidatedDrillDownIncludesEveryCurrencyAndKeepsCategoryAndMonth() {
+        val category = "00000000-0000-4000-8000-000000000002"
+        // Even an old selected account must never narrow the consolidated report.
+        val state = AdvancedAnalyticsUiState(mode = "consolidated", currency = "KZT",
+            accountId = "00000000-0000-4000-8000-000000000001")
+        val bounds = analyticsMonthBounds(YearMonth.of(2026, 10))
+        val exact = analyticsHistoryFilter(state, "expense", bounds.first, bounds.second, category, categoryExact = true)
+        assertNull(exact.accountId)
+        assertNull(exact.currency)
+        assertEquals(category, exact.categoryId)
+        assertEquals("expense", exact.kind)
+        assertEquals(bounds.first, exact.from)
+        assertEquals(bounds.second, exact.to)
+        assertTrue(exact.analyticsOnly)
+        assertTrue(exact.categoryExact)
+        assertFalse(exact.showDeleted)
+        exact.validate()
+
+        val none = analyticsHistoryFilter(state, "income", bounds.first, bounds.second, uncategorized = true)
+        assertNull(none.currency)
+        assertNull(none.accountId)
+        assertNull(none.categoryId)
+        assertTrue(none.uncategorized)
+        none.validate()
+    }
+
+    @Test fun originalForeignCurrencyDrillDownStaysInSelectedCurrency() {
+        val state = AdvancedAnalyticsUiState(mode = "original", currency = "USD")
+        val bounds = analyticsMonthBounds(YearMonth.of(2026, 10))
+        val filter = analyticsHistoryFilter(state, "income", bounds.first, bounds.second)
+        assertEquals("USD", filter.currency)
+        assertNull(filter.accountId)
+        assertTrue(filter.analyticsOnly)
+        filter.validate()
+    }
+
+    @Test fun rateCaptionPreservesDecimalPrecisionAndExposesPerCurrencyDate() {
+        assertEquals("1 USD = 486,123456789 KZT · 16.10.2026",
+            analyticsConversionRateText(AdvancedAnalyticsRate("USD", BigDecimal("486.123456789000"), "2026-10-16")))
+        assertEquals("1 EUR = 500 KZT · дата курса не указана",
+            analyticsConversionRateText(AdvancedAnalyticsRate("EUR", BigDecimal("5E+2"), null)))
+        assertEquals("1 KZT = 1 KZT · базовая валюта",
+            analyticsConversionRateText(AdvancedAnalyticsRate("KZT", BigDecimal.ONE, null)))
     }
 }

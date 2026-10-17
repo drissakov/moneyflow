@@ -14,6 +14,7 @@ import (
 )
 
 type AnalyticsDashboardFilter struct {
+	Mode      string
 	Month     string
 	Currency  string
 	Months    int
@@ -55,24 +56,35 @@ type AnalyticsComparisonBucket struct {
 }
 
 type AnalyticsDashboardView struct {
-	Month        string                      `json:"month"`
-	Currency     string                      `json:"currency"`
-	Timezone     string                      `json:"timezone"`
-	Months       int                         `json:"months"`
-	AccountID    *string                     `json:"account_id"`
-	AccountIDs   []string                    `json:"account_ids"`
-	From         string                      `json:"from"`
-	To           string                      `json:"to"`
-	AsOf         time.Time                   `json:"as_of"`
-	Today        string                      `json:"today"`
-	PeriodStatus string                      `json:"period_status"`
-	Summary      AnalyticsComparison         `json:"summary"`
-	Series       []AnalyticsSeriesPoint      `json:"series"`
-	Income       []AnalyticsComparisonBucket `json:"income"`
-	Expenses     []AnalyticsComparisonBucket `json:"expenses"`
+	Mode         string                        `json:"mode"`
+	Conversion   *AnalyticsDashboardConversion `json:"conversion,omitempty"`
+	Month        string                        `json:"month"`
+	Currency     string                        `json:"currency"`
+	Timezone     string                        `json:"timezone"`
+	Months       int                           `json:"months"`
+	AccountID    *string                       `json:"account_id"`
+	AccountIDs   []string                      `json:"account_ids"`
+	From         string                        `json:"from"`
+	To           string                        `json:"to"`
+	AsOf         time.Time                     `json:"as_of"`
+	Today        string                        `json:"today"`
+	PeriodStatus string                        `json:"period_status"`
+	Summary      AnalyticsComparison           `json:"summary"`
+	Series       []AnalyticsSeriesPoint        `json:"series"`
+	Income       []AnalyticsComparisonBucket   `json:"income"`
+	Expenses     []AnalyticsComparisonBucket   `json:"expenses"`
 }
 
 func dashboardPeriod(f AnalyticsDashboardFilter) (AnalyticsDashboardFilter, time.Time, time.Time, error) {
+	if f.Mode == "" {
+		f.Mode = "original"
+	}
+	if f.Mode != "original" && f.Mode != "consolidated" {
+		return f, time.Time{}, time.Time{}, Invalid("Mode must be original or consolidated.")
+	}
+	if f.Mode == "consolidated" && (f.Currency != "KZT" || f.AccountID != "") {
+		return f, time.Time{}, time.Time{}, Invalid("Consolidated reports require KZT and all accounts.")
+	}
 	if err := ValidateCurrency(f.Currency); err != nil {
 		return f, time.Time{}, time.Time{}, err
 	}
@@ -136,12 +148,15 @@ func dashboardDifference(a, b string) (string, error) {
 	return dashboardResult(new(big.Int).Sub(av, bv))
 }
 
-// A dashboard is one read-only MVCC snapshot. It never waits on a user write
-// advisory lock, runs an FX request or writes cache/planning/ledger data.
+// Every dashboard's ledger and categories use one read-only MVCC snapshot.
+// Consolidated FX cache refreshes happen outside that ledger transaction.
 func (s *Service) AnalyticsDashboard(ctx context.Context, userID string, filter AnalyticsDashboardFilter) (AnalyticsDashboardView, error) {
 	f, start, end, err := dashboardPeriod(filter)
 	if err != nil {
 		return AnalyticsDashboardView{}, err
+	}
+	if f.Mode == "consolidated" {
+		return s.consolidatedAnalyticsDashboard(ctx, userID, f, start, end)
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)
 	today := planningToday(now)
@@ -151,7 +166,7 @@ func (s *Service) AnalyticsDashboard(ctx context.Context, userID string, filter 
 	} else if f.Month > today.Format("2006-01") {
 		status = "future"
 	}
-	view := AnalyticsDashboardView{Month: f.Month, Currency: f.Currency, Timezone: "UTC+05:00", Months: f.Months, AccountIDs: make([]string, 0), From: start.Format(time.RFC3339), To: end.Format(time.RFC3339), AsOf: now, Today: today.Format(time.DateOnly), PeriodStatus: status, Series: make([]AnalyticsSeriesPoint, 0, f.Months), Income: make([]AnalyticsComparisonBucket, 0), Expenses: make([]AnalyticsComparisonBucket, 0)}
+	view := AnalyticsDashboardView{Mode: "original", Month: f.Month, Currency: f.Currency, Timezone: "UTC+05:00", Months: f.Months, AccountIDs: make([]string, 0), From: start.Format(time.RFC3339), To: end.Format(time.RFC3339), AsOf: now, Today: today.Format(time.DateOnly), PeriodStatus: status, Series: make([]AnalyticsSeriesPoint, 0, f.Months), Income: make([]AnalyticsComparisonBucket, 0), Expenses: make([]AnalyticsComparisonBucket, 0)}
 	if f.AccountID != "" {
 		view.AccountID = &f.AccountID
 	}

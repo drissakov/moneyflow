@@ -67,6 +67,11 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
                 if (state.filter.analyticsOnly) "Операции выбранного отчёта. Даты — по времени Казахстана, UTC+5."
                 else "Все счета. Каждая операция. В одном месте.")
         }
+        if (state.filter.analyticsOnly && state.filter.currency == null) item(key = "original_currencies") {
+            Text("Здесь показаны операции всех валют с исходными суммами. В общем отчёте они пересчитаны в тенге по указанным там курсам.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("ledger_scope_all_currencies"))
+        }
         item(key = "actions") {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { viewModel.clearMessage(); selectedId = null; editor = "create" }, enabled = state.canWrite && activeAccounts.isNotEmpty(),

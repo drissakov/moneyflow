@@ -20,7 +20,22 @@ class AdvancedAnalyticsApiTest {
             assertEquals("/api/v1/analytics/dashboard", url.encodedPath)
             assertEquals("2026-10", url.queryParameter("month")); assertEquals("KWD", url.queryParameter("currency"))
             assertEquals("12", url.queryParameter("months")); assertEquals(account, url.queryParameter("account_id"))
+            assertEquals("original", url.queryParameter("mode"))
             assertNull(url.queryParameter("timezone")); assertEquals("Bearer captured-session", request.getHeader("Authorization"))
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test fun consolidatedQueryUsesKztAllAccountsAndExplicitModeWithoutChangingTheCapturedToken() = runBlocking {
+        MockWebServer().use { server ->
+            server.start(); server.enqueue(json("{}"))
+            ApiFactory.create(server.url("/").toString()) { "replacement-session" }
+                .analyticsDashboard("2026-10", "KZT", 6, null, "Bearer captured-session", "consolidated")
+            val request = server.takeRequest(1, TimeUnit.SECONDS)!!; val url = request.requestUrl!!
+            assertEquals("consolidated", url.queryParameter("mode"))
+            assertEquals("KZT", url.queryParameter("currency")); assertNull(url.queryParameter("account_id"))
+            assertEquals("6", url.queryParameter("months"))
+            assertEquals("Bearer captured-session", request.getHeader("Authorization"))
             assertEquals(1, server.requestCount)
         }
     }

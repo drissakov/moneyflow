@@ -19,6 +19,7 @@ data class AdvancedAnalyticsUiState(
     val currency: String = "KZT",
     val months: Int = 6,
     val accountId: String? = null,
+    val mode: String = "original",
     val accounts: List<Account> = emptyList(),
     val report: AdvancedAnalyticsReport? = null,
     val loading: Boolean = false,
@@ -26,7 +27,7 @@ data class AdvancedAnalyticsUiState(
     val receivedAt: Instant? = null,
     val error: String? = null,
 ) {
-    val filter: AdvancedAnalyticsFilter get() = AdvancedAnalyticsFilter(month, currency, months, accountId)
+    val filter: AdvancedAnalyticsFilter get() = AdvancedAnalyticsFilter(month, currency, months, accountId, mode)
 }
 
 /** Read-only server reports. A filter or session change invalidates every older in-flight response. */
@@ -55,6 +56,9 @@ class AdvancedAnalyticsViewModel(private val repository: MoneyFlowRepository) : 
     fun clearMessage() { _state.update { it.copy(error = null) } }
     fun setMonth(month: String) = changeFilter(state.value.filter.copy(month = month))
     fun setMonths(months: Int) = changeFilter(state.value.filter.copy(months = months))
+    fun setMode(mode: String) = changeFilter(state.value.filter.let {
+        if (mode == "consolidated") it.copy(mode = mode, currency = "KZT", accountId = null) else it.copy(mode = mode)
+    })
     fun setCurrency(currency: String) {
         val selected = state.value.accountId?.let { id -> state.value.accounts.firstOrNull { it.id == id } }
         changeFilter(state.value.filter.copy(currency = currency, accountId = selected?.takeIf { it.currency == currency }?.id))
@@ -68,7 +72,7 @@ class AdvancedAnalyticsViewModel(private val repository: MoneyFlowRepository) : 
     private fun changeFilter(filter: AdvancedAnalyticsFilter) {
         try { filter.validate() } catch (error: Exception) { _state.update { it.copy(error = message(error)) }; return }
         if (filter == state.value.filter) return
-        _state.update { it.copy(month = filter.month, currency = filter.currency, months = filter.months, accountId = filter.accountId,
+        _state.update { it.copy(month = filter.month, currency = filter.currency, months = filter.months, accountId = filter.accountId, mode = filter.mode,
             report = null, receivedAt = null, offline = false, error = null) }
         load()
     }
@@ -123,6 +127,7 @@ class AdvancedAnalyticsViewModel(private val repository: MoneyFlowRepository) : 
             401 -> "Сессия истекла. Войдите снова, чтобы загрузить отчёт."
             409 -> "Сумма отчёта превышает допустимый размер. Выберите другой период или отдельный счёт."
             404 -> "Выбранный счёт недоступен. Обновите список счетов."
+            503 -> "Курсы валют временно недоступны. Обновите отчёт позже. Сохранённый отчёт, если есть, доступен только для просмотра."
             else -> "Не удалось загрузить отчёт (${error.code()}). Обновите данные."
         }
         else -> error.message ?: "Не удалось загрузить отчёт"

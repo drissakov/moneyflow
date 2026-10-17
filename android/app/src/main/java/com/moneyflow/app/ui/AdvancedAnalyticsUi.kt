@@ -29,15 +29,16 @@ import java.time.format.DateTimeFormatter
 @Composable
 internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel: AdvancedAnalyticsViewModel,
     onOpenHistory: (LedgerFilter) -> Unit) {
-    var mode by rememberSaveable { mutableStateOf("comparison") }
+    var tab by rememberSaveable { mutableStateOf("comparison") }
     var kind by rememberSaveable { mutableStateOf("expense") }
     var choosingAccount by rememberSaveable { mutableStateOf(false) }
-    var selectedSeriesMonth by rememberSaveable(state.month, state.currency, state.months, state.accountId) { mutableStateOf(state.month) }
-    var selectedRootId by rememberSaveable(state.month, state.currency, state.accountId, kind) { mutableStateOf<String?>(null) }
+    var selectedSeriesMonth by rememberSaveable(state.month, state.currency, state.months, state.accountId, state.mode) { mutableStateOf(state.month) }
+    var selectedRootId by rememberSaveable(state.month, state.currency, state.accountId, state.mode, kind) { mutableStateOf<String?>(null) }
     var expandedTable by rememberSaveable { mutableStateOf(false) }
-    P0ResetOnUserChange(state.session?.user?.id) { selectedRootId = null; choosingAccount = false; mode = "comparison" }
+    P0ResetOnUserChange(state.session?.user?.id) { selectedRootId = null; choosingAccount = false; tab = "comparison" }
     LaunchedEffect(Unit) { viewModel.refresh() }
-    val report = state.report?.takeIf { it.month == state.month && it.currency == state.currency && it.months == state.months && it.accountId == state.accountId }
+    val consolidated = state.mode == "consolidated"
+    val report = state.report?.takeIf { it.month == state.month && it.currency == state.currency && it.months == state.months && it.accountId == state.accountId && it.mode == state.mode }
     val month = runCatching { YearMonth.parse(state.month) }.getOrDefault(YearMonth.now())
     val point = report?.series?.firstOrNull { it.month == selectedSeriesMonth } ?: report?.series?.lastOrNull()
     val roots = (if (kind == "income") report?.income else report?.expenses).orEmpty()
@@ -59,21 +60,30 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf("comparison" to "Сравнение", "balance" to "Баланс", "categories" to "Категории").forEach { (id, title) ->
-                    FilterChip(mode == id, { mode = id }, label = { Text(title) }, modifier = Modifier.testTag("reports_tab_$id"))
+                    FilterChip(tab == id, { tab = id }, label = { Text(title) }, modifier = Modifier.testTag("reports_tab_$id"))
                 }
             }
         }
+        item { ReportCurrencyMode(state.mode, state.loading) { choosingAccount = false; viewModel.setMode(it) } }
         item {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 ReportMonthNavigation(month, state.loading, viewModel::setMonth)
-                CurrencySelector("Валюта операций", SupportedCurrency.fromCode(state.currency), { viewModel.setCurrency(it.code) },
-                    modifier = Modifier.fillMaxWidth().testTag("reports_currency"), tagPrefix = "reports_currency")
-                val selected = state.accounts.firstOrNull { it.id == state.accountId }
-                P0Choice("Какие счета учитывать", selected?.let { "${it.name}${if (it.archived) " · архив" else ""}" } ?: if (state.accountId == null) "Все счета в ${state.currency}" else "Выбранный счёт",
-                    "reports_account", !state.loading) { choosingAccount = true }
-                Text("Без конвертации валют · календарные месяцы по Казахстану, UTC+5. В «Все счета» входят также архивные и скрытые из общего баланса.",
+                if (consolidated) {
+                    Text("Все счета · KZT", style = MaterialTheme.typography.titleLarge, modifier = Modifier.testTag("reports_consolidated_scope"))
+                    Text("Все валюты, включая архивные счета и скрытые из общего баланса. Доходы, расходы и остатки всех месяцев пересчитаны по одному текущему набору курсов.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    CurrencySelector("Валюта операций", SupportedCurrency.fromCode(state.currency), { viewModel.setCurrency(it.code) },
+                        modifier = Modifier.fillMaxWidth().testTag("reports_currency"), tagPrefix = "reports_currency")
+                    val selected = state.accounts.firstOrNull { it.id == state.accountId }
+                    P0Choice("Какие счета учитывать", selected?.let { "${it.name}${if (it.archived) " · архив" else ""}" } ?: if (state.accountId == null) "Все счета в ${state.currency}" else "Выбранный счёт",
+                        "reports_account", !state.loading) { choosingAccount = true }
+                    Text("Без конвертации валют. В «Все счета» входят также архивные и скрытые из общего баланса.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text("Календарные месяцы по Казахстану · UTC+5.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (mode != "categories") FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (tab != "categories") FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(3, 6, 12).forEach { span -> FilterChip(state.months == span, { viewModel.setMonths(span) }, label = { Text("$span мес.") },
                         enabled = !state.loading, modifier = Modifier.testTag("reports_span_$span")) }
                 }
@@ -88,17 +98,18 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
         } }
         if (state.offline) item { P0Message("Сохранённый отчёт${state.receivedAt?.let { " от ${analyticsTimestamp(it.toString())}" }.orEmpty()}. Новые изменения могут быть не учтены; обновите данные при подключении.") }
         if (report != null) {
+            report.conversion?.takeIf { consolidated }?.let { conversion -> item { ReportsConversionContext(conversion) } }
             if (report.periodStatus != "past") item { P0Message(if (report.periodStatus == "current")
                 "Месяц ещё идёт. Итоги предварительные и включают все внесённые операции этого месяца, в том числе с будущей датой. Предыдущий месяц показан целиком."
                 else "Будущий месяц: показаны только уже внесённые операции. Плановые платежи без подтверждения сюда не входят.") }
-            when (mode) {
+            when (tab) {
                 "comparison" -> {
                     item { ReportsComparisonSummary(report) }
                     item { ReportChartCard("01 / ПО МЕСЯЦАМ", "Доходы рядом\nс расходами.") {
                         MonthlyComparisonBars(report.series, report.currency, point?.month ?: report.month) { selectedSeriesMonth = it }
                     } }
                     if (point != null) item { ReportMonthDetails(point, report.currency, false,
-                        onCategories = { selectedRootId = null; mode = "categories"; viewModel.setMonth(point.month) },
+                        onCategories = { selectedRootId = null; tab = "categories"; viewModel.setMonth(point.month) },
                         onHistory = { type -> onOpenHistory(analyticsHistoryFilter(state, type, point.from, point.to)) }) }
                     item { Text("Разница доходов и расходов показывает, сколько удалось сохранить за месяц. Переводы между своими счетами и исключённые из отчётов операции здесь не учитываются; комиссии остаются расходами.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -108,10 +119,11 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
                         MonthlyBalanceLine(report.series, report.currency, point?.month ?: report.month) { selectedSeriesMonth = it }
                     } }
                     if (point != null) item { ReportMonthDetails(point, report.currency, true,
-                        onCategories = { selectedRootId = null; mode = "categories"; viewModel.setMonth(point.month) },
+                        onCategories = { selectedRootId = null; tab = "categories"; viewModel.setMonth(point.month) },
                         onHistory = { type -> onOpenHistory(analyticsHistoryFilter(state, type, point.from, point.to)) }) }
                     item { P0Message("Остатки восстановлены из текущих начальных остатков счетов и всей сохранённой истории. Здесь учитываются переводы и движения, исключённые из отчётов. Поэтому изменение остатка может отличаться от разницы доходов и расходов.") }
-                    item { Text("Баланс каждой валюты показан отдельно. Изменение начального остатка или прошлой операции пересчитывает линию; валютная переоценка не добавляется.",
+                    item { Text(if (consolidated) "Все остатки выражены в тенге по одному текущему набору курсов. Это не история ежедневной валютной переоценки. Обновление курсов, изменение начального остатка или прошлой операции пересчитывает всю линию."
+                        else "Баланс каждой валюты показан отдельно. Изменение начального остатка или прошлой операции пересчитывает линию; валютная переоценка не добавляется.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
                 "categories" -> {
@@ -155,7 +167,7 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
                     }
                 }
             }
-            if (mode != "categories") {
+            if (tab != "categories") {
                 item { TextButton(onClick = { expandedTable = !expandedTable }, modifier = Modifier.testTag("reports_table_toggle")) {
                     Text(if (expandedTable) "Свернуть точные данные ↑" else "Точные данные по месяцам ↓")
                 } }
@@ -164,7 +176,7 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
                         modifier = Modifier.fillMaxWidth().clickable(role = Role.Button) { selectedSeriesMonth = row.month }.testTag("reports_table_${row.month}")) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text(analyticsMonthName(row.month, true), style = MaterialTheme.typography.titleLarge)
-                            if (mode == "balance") {
+                            if (tab == "balance") {
                                 PlanningReceiptLine("На начало", p0Money(row.openingBalanceMinor, report.currency))
                                 PlanningReceiptLine("На конец", p0Money(row.closingBalanceMinor, report.currency), true)
                                 PlanningReceiptLine("Изменение остатка", analyticsSignedMoney(row.ledgerChangeMinor, report.currency))
@@ -184,9 +196,51 @@ internal fun AdvancedAnalyticsScreen(state: AdvancedAnalyticsUiState, viewModel:
             }
         } else if (!state.loading && state.error == null) item { P0Message("Выберите месяц и загрузите отчёт.") }
     }
-    if (choosingAccount) P0OptionsSheet("Счёт для отчёта", listOf(P0Option("all", "Все счета в ${state.currency}", "Включая архивные и скрытые из общего баланса")) +
+    if (choosingAccount && !consolidated) P0OptionsSheet("Счёт для отчёта", listOf(P0Option("all", "Все счета в ${state.currency}", "Включая архивные и скрытые из общего баланса")) +
         state.accounts.filter { it.currency == state.currency }.map { P0Option(it.id, it.name, "${it.currency}${if (it.archived) " · архив" else ""}") },
         state.accountId ?: "all", "reports_accounts", { choosingAccount = false }) { viewModel.setAccount(it.takeUnless { id -> id == "all" }); choosingAccount = false }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ReportCurrencyMode(mode: String, loading: Boolean, onMode: (String) -> Unit) {
+    Surface(shape = P0Shape, color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("КАК СЧИТАТЬ ДЕНЬГИ", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("original" to "В своей валюте", "consolidated" to "Всё в тенге").forEach { (id, label) ->
+                    FilterChip(selected = mode == id, onClick = { onMode(id) }, enabled = !loading,
+                        label = { Text(label) }, modifier = Modifier.testTag("reports_mode_$id"))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReportsConversionContext(conversion: AdvancedAnalyticsConversion) {
+    Surface(shape = P0Shape, color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth().testTag("reports_conversion_context")) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("КУРСЫ · ${conversion.provider.uppercase()}", style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (conversion.stale) Text("Использованы сохранённые курсы. Они могут отличаться от последних доступных; попробуйте обновить отчёт.",
+                style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.testTag("reports_conversion_stale"))
+            conversion.rates.sortedBy { it.currency }.forEach { rate ->
+                Text(analyticsConversionRateText(rate), style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("reports_conversion_rate_${rate.currency}"))
+            }
+            if (conversion.rates.none { it.currency != "KZT" }) Text("В этом отчёте нет валютных сумм для конвертации.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(conversion.fetchedAt?.let { "Курсы получены ${analyticsTimestamp(it)} · UTC+5" } ?: "Время получения курсов не указано.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Один набор курсов для всего периода. Исторические курсы по дням не применяются. Операции по нажатию открываются в исходных валютах.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 @Composable
@@ -221,7 +275,8 @@ private fun ReportsComparisonSummary(report: AdvancedAnalyticsReport) {
     ReportChartCard("ИТОГ / ${analyticsMonthName(report.month, true).uppercase()}", if (summary.netMinor >= 0) "Осталось после трат." else "Расходы выше доходов.") {
         Text(analyticsSignedMoney(summary.netMinor, report.currency), style = MaterialTheme.typography.displaySmall,
             modifier = Modifier.testTag("reports_net_total"))
-        Text("Разница доходов и расходов", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(if (report.mode == "consolidated") "Разница доходов и расходов · всё в тенге" else "Разница доходов и расходов",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         ReportComparedMetric("Доходы", summary.incomeMinor, summary.previousIncomeMinor, summary.incomeDeltaMinor, report.currency, "reports_income_total")
         ReportComparedMetric("Расходы", summary.expenseMinor, summary.previousExpenseMinor, summary.expenseDeltaMinor, report.currency, "reports_expense_total")
@@ -265,8 +320,15 @@ internal fun analyticsSignedMoney(amount: Long, currency: String): String = (if 
 
 internal fun analyticsHistoryFilter(state: AdvancedAnalyticsUiState, kind: String?, from: String, to: String,
     categoryId: String? = null, uncategorized: Boolean = false, categoryExact: Boolean = false): LedgerFilter =
-    LedgerFilter(accountId = state.accountId, categoryId = categoryId, kind = kind, from = from, to = to, currency = state.currency,
+    LedgerFilter(accountId = state.accountId.takeUnless { state.mode == "consolidated" }, categoryId = categoryId, kind = kind, from = from, to = to,
+        currency = state.currency.takeUnless { state.mode == "consolidated" },
         analyticsOnly = true, uncategorized = uncategorized, categoryExact = categoryExact)
+
+internal fun analyticsConversionRateText(rate: AdvancedAnalyticsRate): String {
+    val date = rate.rateDate?.let { value -> runCatching { java.time.LocalDate.parse(value).format(DateTimeFormatter.ofPattern("dd.MM.yyyy")) }.getOrDefault(value) }
+    return "1 ${rate.currency} = ${rate.rate.stripTrailingZeros().toPlainString().replace('.', ',')} KZT" +
+        (date?.let { " · $it" } ?: if (rate.currency == "KZT") " · базовая валюта" else " · дата курса не указана")
+}
 
 internal fun analyticsMonthBounds(month: YearMonth): Pair<String, String> =
     month.atDay(1).atStartOfDay().atOffset(ZoneOffset.ofHours(5)).toInstant().toString() to

@@ -2,6 +2,7 @@ package com.moneyflow.app.data.remote
 
 import com.google.gson.annotations.SerializedName
 import com.moneyflow.app.data.domain.*
+import java.math.BigDecimal
 import java.math.BigInteger
 import java.time.Instant
 import java.time.LocalDate
@@ -72,6 +73,39 @@ data class AnalyticsMonthPointDto(
     }
 }
 
+data class AdvancedAnalyticsRateDto(
+    val currency: String, val rate: String,
+    @SerializedName("rate_date") val rateDate: String?,
+) {
+    fun toDomain(): AdvancedAnalyticsRate {
+        SupportedCurrency.fromCode(currency)
+        val exact = validateRate(rate)
+        rateDate?.let { require(LocalDate.parse(it).toString() == it) }
+        if (currency == "KZT") require(exact.compareTo(BigDecimal.ONE) == 0 && rateDate == null)
+        else requireNotNull(rateDate)
+        return AdvancedAnalyticsRate(currency, exact, rateDate)
+    }
+}
+
+data class AdvancedAnalyticsConversionDto(
+    val policy: String, val provider: String,
+    @SerializedName("fetched_at") val fetchedAt: String?,
+    val stale: Boolean, val rates: List<AdvancedAnalyticsRateDto>,
+) {
+    fun toDomain(hasAccounts: Boolean): AdvancedAnalyticsConversion {
+        require(policy == "latest_snapshot" && provider == "Frankfurter") { "Неизвестный источник курсов отчёта" }
+        fetchedAt?.let(Instant::parse)
+        val codes = rates.map { it.currency }
+        require(codes == codes.distinct().sorted()) { "Курсы валют должны быть уникальными и упорядоченными" }
+        require(hasAccounts == rates.isNotEmpty()) { "Курсы отчёта не соответствуют списку счетов" }
+        val validated = rates.map { it.toDomain() }
+        if (validated.any { it.currency != "KZT" }) requireNotNull(fetchedAt)
+        else require(fetchedAt == null && !stale)
+        if (stale) requireNotNull(fetchedAt)
+        return AdvancedAnalyticsConversion(policy, provider, fetchedAt, stale, validated)
+    }
+}
+
 data class AdvancedAnalyticsReportDto(
     val month: String, val currency: String, val timezone: String, val months: Int,
     @SerializedName("account_id") val accountId: String?,
@@ -81,9 +115,14 @@ data class AdvancedAnalyticsReportDto(
     @SerializedName("period_status") val periodStatus: String,
     val summary: AdvancedAnalyticsSummaryDto, val series: List<AnalyticsMonthPointDto>,
     val income: List<AdvancedAnalyticsCategoryDto>, val expenses: List<AdvancedAnalyticsCategoryDto>,
+    // Gson leaves an absent field null in reports cached by versions predating consolidated reports.
+    val mode: String? = null,
+    val conversion: AdvancedAnalyticsConversionDto? = null,
 ) {
     fun toDomain(expected: AdvancedAnalyticsFilter): AdvancedAnalyticsReport {
         expected.validate()
+        val reportMode = mode ?: "original"
+        require(reportMode == expected.mode) { "Сервер вернул отчёт для другого режима" }
         require(month == expected.month && currency == expected.currency && months == expected.months && accountId == expected.accountId) {
             "Сервер вернул отчёт для другого периода, валюты или счёта"
         }
@@ -91,6 +130,13 @@ data class AdvancedAnalyticsReportDto(
         accountId?.let(::validateUuid); accountIds.forEach(::validateUuid)
         require(accountIds == accountIds.distinct().sorted())
         if (accountId != null) require(accountIds == listOf(accountId))
+        val conversionSnapshot = if (reportMode == "consolidated") {
+            require(currency == "KZT" && accountId == null)
+            requireNotNull(conversion) { "В общем отчёте отсутствуют курсы конвертации" }.toDomain(accountIds.isNotEmpty())
+        } else {
+            require(conversion == null) { "Отчёт в исходной валюте не должен содержать конвертацию" }
+            null
+        }
         val selected = YearMonth.parse(month); validateMonthBounds(selected, from, to)
         val stamp = Instant.parse(asOf); val date = LocalDate.parse(today)
         require(date.toString() == today && stamp.atOffset(ZoneOffset.ofHours(5)).toLocalDate() == date)
@@ -112,7 +158,7 @@ data class AdvancedAnalyticsReportDto(
         require(incomeBuckets.sumExact { it.previousAmountMinor } == BigInteger.valueOf(totals.previousIncomeMinor))
         require(expenseBuckets.sumExact { it.previousAmountMinor } == BigInteger.valueOf(totals.previousExpenseMinor))
         return AdvancedAnalyticsReport(month, currency, timezone, months, accountId, accountIds, from, to, asOf, today,
-            periodStatus, totals, points, incomeBuckets, expenseBuckets)
+            periodStatus, totals, points, incomeBuckets, expenseBuckets, reportMode, conversionSnapshot)
     }
 }
 

@@ -2,6 +2,8 @@ package com.moneyflow.app.data
 
 import com.google.gson.Gson
 import com.moneyflow.app.data.remote.AdvancedAnalyticsReportDto
+import com.moneyflow.app.data.remote.AdvancedAnalyticsConversionDto
+import com.moneyflow.app.data.remote.AdvancedAnalyticsRateDto
 import com.moneyflow.app.data.remote.AdvancedAnalyticsSummaryDto
 import com.moneyflow.app.data.remote.AnalyticsMonthPointDto
 import java.time.Instant
@@ -12,7 +14,7 @@ import java.time.ZoneOffset
 object AdvancedAnalyticsTestFixtures {
     const val ACCOUNT = "b5555555-5555-4555-8555-555555555555"
     fun report(month: String, currency: String = "KZT", months: Int = 6, accountId: String? = null,
-        stamp: Instant = Instant.now()): String {
+        stamp: Instant = Instant.now(), mode: String = "original"): String {
         val selected = YearMonth.parse(month)
         fun bounds(value: YearMonth) = "${value.atDay(1)}T00:00:00+05:00" to "${value.plusMonths(1).atDay(1)}T00:00:00+05:00"
         val today = stamp.atOffset(ZoneOffset.ofHours(5)).toLocalDate(); val current = YearMonth.from(today)
@@ -24,6 +26,8 @@ object AdvancedAnalyticsTestFixtures {
         return Gson().toJson(AdvancedAnalyticsReportDto(month, currency, "UTC+05:00", months, accountId,
             listOf(accountId ?: ACCOUNT), from, to, stamp.toString(), today.toString(),
             when { selected < current -> "past"; selected > current -> "future"; else -> "current" },
-            AdvancedAnalyticsSummaryDto("0", "0", "0", "0", "0", "0", "0", "0", "0"), rows, emptyList(), emptyList()))
+            AdvancedAnalyticsSummaryDto("0", "0", "0", "0", "0", "0", "0", "0", "0"), rows, emptyList(), emptyList(), mode,
+            if (mode == "consolidated") AdvancedAnalyticsConversionDto("latest_snapshot", "Frankfurter", stamp.toString(), false,
+                listOf(AdvancedAnalyticsRateDto("KZT", "1", null), AdvancedAnalyticsRateDto("USD", "489.25", today.minusDays(1).toString()))) else null))
     }
 }

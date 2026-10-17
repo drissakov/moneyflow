@@ -613,7 +613,7 @@ class MoneyFlowRepository(
     suspend fun advancedAnalytics(filter: AdvancedAnalyticsFilter): CachedAdvancedAnalytics {
         filter.validate()
         val current = requireSession(); val revision = mutex.withLock { analyticsRevision }
-        val response = api.analyticsDashboard(filter.month, filter.currency, filter.months, filter.accountId, "Bearer ${current.token}")
+        val response = api.analyticsDashboard(filter.month, filter.currency, filter.months, filter.accountId, "Bearer ${current.token}", filter.mode)
         val result = CachedAdvancedAnalytics(response.toDomain(filter), Instant.now())
         mutex.withLock {
             check(isCurrentSession(current) && analyticsRevision == revision) { "Данные изменились; обновите отчёт" }
