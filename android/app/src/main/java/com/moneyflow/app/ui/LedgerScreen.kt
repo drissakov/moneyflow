@@ -113,7 +113,7 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
             }
             if (state.filter.analyticsOnly) {
                 val start = state.filter.from?.let { ledgerFilterDate(it, true) }
-                val end = state.filter.to?.let { LocalDate.parse(ledgerFilterDate(it, true)).minusDays(1).toString() }
+                val end = state.filter.to?.let { ledgerFilterInclusiveEndDate(it, true) }
                 Text(listOfNotNull(start, end).joinToString(" — ") + " · Только включённые в отчёты",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.testTag("ledger_scope_report"))
@@ -242,10 +242,11 @@ private fun ledgerDay(iso: String, reportScope: Boolean): String {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun P0LedgerFilters(state: LedgerUiState, viewModel: LedgerViewModel, onDismiss: () -> Unit) {
-    var filter by remember { mutableStateOf(state.filter) }
+    val originalFilter = remember { state.filter }
+    var filter by remember { mutableStateOf(originalFilter) }
     var picker by remember { mutableStateOf<String?>(null) }
     var fromDate by remember { mutableStateOf(filter.from?.let { ledgerFilterDate(it, filter.analyticsOnly) }.orEmpty()) }
-    var toDate by remember { mutableStateOf(filter.to?.let { LocalDate.parse(ledgerFilterDate(it, filter.analyticsOnly)).minusDays(1).toString() }.orEmpty()) }
+    var toDate by remember { mutableStateOf(filter.to?.let { ledgerFilterInclusiveEndDate(it, filter.analyticsOnly) }.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     P0Sheet("ledger_filter_sheet", "Найти нужное.", "История / фильтры", false, onDismiss) {
         P0Choice("Счёт", state.accounts.firstOrNull { it.id == filter.accountId }?.name ?: "Все счета", "ledger_filter_account") { picker = "account" }
@@ -282,8 +283,8 @@ private fun P0LedgerFilters(state: LedgerUiState, viewModel: LedgerViewModel, on
         error?.let { P0Message(it) }
         P0Submit("Показать операции", "ledger_filter_apply", false) {
             runCatching {
-                val start = fromDate.trim().takeIf(String::isNotBlank)?.let { ledgerFilterBoundary(it, filter.analyticsOnly, false) }
-                val end = toDate.trim().takeIf(String::isNotBlank)?.let { ledgerFilterBoundary(it, filter.analyticsOnly, true) }
+                val start = ledgerFilterEditedBoundary(fromDate, filter.analyticsOnly, false, originalFilter.from, originalFilter.analyticsOnly)
+                val end = ledgerFilterEditedBoundary(toDate, filter.analyticsOnly, true, originalFilter.to, originalFilter.analyticsOnly)
                 require(start == null || end == null || java.time.Instant.parse(start).isBefore(java.time.Instant.parse(end))) { "Конец периода должен быть не раньше начала" }
                 viewModel.setFilter(filter.copy(from = start, to = end)); onDismiss()
             }.onFailure { error = it.message ?: "Проверьте даты" }
