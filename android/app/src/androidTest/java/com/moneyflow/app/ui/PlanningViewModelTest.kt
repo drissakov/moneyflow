@@ -5,6 +5,7 @@ import android.content.ContextWrapper
 import android.content.SharedPreferences
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -125,7 +126,12 @@ class PlanningViewModelTest {
             val today = PlanningCalendar.today(); val end = YearMonth.from(today).atEndOfMonth(); val days = ChronoUnit.DAYS.between(today, end) + 1
             return """{"as_of":"$today","until":"$end","horizon_reason":"month_end","base_currency":"KZT","complete":true,"stale":false,"fetched_at":null,"missing_currencies":[],"accounts":[],"obligations":[],"balance_minor":"0","reserve_minor":"0","mandatory_minor":"0","free_minor":"0","per_day_minor":"0","days":$days,"overdue_from":"${today.minusDays(366)}","timeline_truncated":false}"""
         }
-        override fun close() { main { models.clear() }; store.clearSession(); database.close(); server.close() }
+        override fun close() {
+            val scopeJob = requireNotNull(vm.viewModelScope.coroutineContext[Job])
+            main { models.clear() }
+            runBlocking { withTimeout(10_000) { scopeJob.join() } }
+            store.clearSession(); database.close(); server.close()
+        }
     }
     private fun json(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
 }

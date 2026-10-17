@@ -5,6 +5,7 @@ import android.content.ContextWrapper
 import android.content.SharedPreferences
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -176,7 +177,14 @@ class AdvancedAnalyticsViewModelTest {
         }
         fun main(action: () -> Unit) = instrumentation.runOnMainSync(action)
         suspend fun awaitReady() { withTimeout(10_000) { while (vm.state.value.loading || vm.state.value.report == null || vm.state.value.accounts.isEmpty()) delay(10) } }
-        override fun close() { release.countDown(); main { models.clear() }; store.clearSession(); database.close(); server.close() }
+        override fun close() {
+            release.countDown()
+            val scopeJob = requireNotNull(vm.viewModelScope.coroutineContext[Job])
+            main { models.clear() }
+            // Cancellation is asynchronous: Room must finish commit/rollback before its database closes.
+            runBlocking { withTimeout(10_000) { scopeJob.join() } }
+            store.clearSession(); database.close(); server.close()
+        }
     }
     private fun json(body: String) = MockResponse().setHeader("Content-Type", "application/json").setBody(body)
 }
