@@ -163,24 +163,24 @@ internal fun MonthlyBalanceLine(series: List<AnalyticsMonthPoint>, currency: Str
             Text("Низ шкалы\n${p0Money(minimum, currency)}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.End)
         }
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val chartWidth = maxOf(maxWidth, (series.size * 74 + 24).dp)
+            // Opening balance has its own slot. Every monthly closing point and its
+            // label share a slot centre, including the final point at the right edge.
+            val chartWidth = maxOf(maxWidth, ((series.size + 1) * 74).dp)
             Column(Modifier.horizontalScroll(scroll).testTag("reports_balance_scroll")) {
                 Canvas(Modifier.width(chartWidth).height(220.dp).testTag("reports_balance_chart")
                     .semantics { contentDescription = "Динамика остатка в $currency. Начало ${p0Money(values.first(), currency)}, конец ${p0Money(values.last(), currency)}. Точные остатки по месяцам приведены ниже." }
                     .pointerInput(series) {
                         detectTapGestures { tap ->
-                            val inset = 16.dp.toPx()
-                            val index = ((tap.x - inset) / (size.width - inset * 2) * series.size).roundToInt().coerceIn(1, series.size)
+                            val index = (tap.x / size.width * (series.size + 1) - .5f).roundToInt().coerceIn(1, series.size)
                             onSelect(series[index - 1].month)
                         }
                     }) {
-                    val inset = 16.dp.toPx()
                     val top = 18.dp.toPx()
                     val bottom = size.height - 18.dp.toPx()
                     fun y(value: Long) = bottom - analyticsPosition(value, minimum, maximum) * (bottom - top)
-                    fun x(index: Int) = inset + (size.width - inset * 2) * index / series.size
+                    fun x(index: Int) = size.width * (index + .5f) / (series.size + 1)
                     val zeroY = y(0)
-                    drawLine(grid, Offset(inset, zeroY), Offset(size.width - inset, zeroY), 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 5.dp.toPx())))
+                    drawLine(grid, Offset(x(0), zeroY), Offset(x(series.size), zeroY), 1.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 5.dp.toPx())))
                     val path = Path().apply {
                         values.forEachIndexed { index, value -> if (index == 0) moveTo(x(index), y(value)) else lineTo(x(index), y(value)) }
                     }
@@ -194,13 +194,18 @@ internal fun MonthlyBalanceLine(series: List<AnalyticsMonthPoint>, currency: Str
                         } else drawCircle(ink, 3.dp.toPx(), center)
                     }
                 }
-                Row(Modifier.width(chartWidth).padding(start = 16.dp)) {
+                Row(Modifier.width(chartWidth)) {
+                    Column(Modifier.width(chartWidth / (series.size + 1)).heightIn(min = 52.dp).padding(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Начало", style = MaterialTheme.typography.labelSmall)
+                        Text(analyticsMonthName(series.first().month), style = MaterialTheme.typography.labelSmall)
+                    }
                     series.forEach { point ->
                         val isSelected = point.month == selectedMonth
                         Surface(shape = P0Shape, color = if (isSelected) MaterialTheme.colorScheme.primary else surface,
                             contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else ink,
                             border = BorderStroke(1.dp, if (isSelected) ink else grid),
-                            modifier = Modifier.width((chartWidth - 16.dp) / series.size).heightIn(min = 52.dp)
+                            modifier = Modifier.width(chartWidth / (series.size + 1)).heightIn(min = 52.dp)
                                 .clickable(role = Role.Button) { onSelect(point.month) }.semantics(mergeDescendants = true) {
                                     selected = isSelected
                                     contentDescription = "${analyticsMonthName(point.month, true)}. На начало ${p0Money(point.openingBalanceMinor, currency)}, на конец ${p0Money(point.closingBalanceMinor, currency)}. Выбрать месяц."
