@@ -230,6 +230,16 @@ func decodeLedger(c *gin.Context, dst any) bool {
 	}
 	var required []string
 	switch dst.(type) {
+	case *service.BudgetInput:
+		required = []string{"name", "category_id", "currency", "limit_minor", "period_start_day", "archived"}
+	case *service.ScheduleInput:
+		required = []string{"name", "account_id", "category_id", "kind", "amount_minor", "note", "start_date", "end_date", "frequency", "interval", "mandatory", "primary_income", "paused", "archived"}
+	case *service.PlanningSettingsInput:
+		required = []string{"expected_version", "base_currency", "reserve_minor", "account_ids"}
+	case *service.OccurrenceInput:
+		required = []string{"expected_template_version", "expected_occurrence_version"}
+	case *service.PostOccurrenceInput:
+		required = []string{"expected_template_version", "expected_occurrence_version", "amount_minor", "occurred_at", "note", "category_id"}
 	case *service.UpdateAccountInput:
 		required = []string{"expected_version", "name", "type", "opening_balance_minor", "archived", "include_in_balance", "sort_order"}
 	case *service.UpdateCategoryInput:
@@ -245,7 +255,7 @@ func decodeLedger(c *gin.Context, dst any) bool {
 	}
 	for _, name := range required {
 		value, exists := fields[name]
-		if !exists || (bytes.Equal(value, []byte("null")) && name != "category_id") {
+		if !exists || (bytes.Equal(value, []byte("null")) && name != "category_id" && name != "end_date") {
 			fail(c, 400, "invalid_request", "Missing required command field: "+name)
 			return false
 		}

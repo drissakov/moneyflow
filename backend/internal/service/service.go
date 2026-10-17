@@ -35,6 +35,7 @@ type Service struct {
 	hashSlots  chan struct{}
 	dummyHash  string
 	fxCache    *fx.Cache
+	now        func() time.Time
 }
 
 type Options struct {
@@ -65,7 +66,10 @@ func New(db *gorm.DB, sessionTTL time.Duration, options ...Options) (*Service, e
 	if err != nil {
 		return nil, err
 	}
-	return &Service{DB: db, sessionTTL: sessionTTL, hashSlots: make(chan struct{}, 2), dummyHash: dummy,
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	return &Service{DB: db, sessionTTL: sessionTTL, hashSlots: make(chan struct{}, 2), dummyHash: dummy, now: opts.Now,
 		fxCache: fx.NewCache(db, opts.FXProvider, opts.FXCacheTTL, opts.FXMaxStale, opts.Now)}, nil
 }
 

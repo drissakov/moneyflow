@@ -191,6 +191,9 @@ func (s *Service) MergeCategory(ctx context.Context, userID, id, key string, inp
 		if err := tx.Model(&model.Transaction{}).Where("user_id=? AND category_id IN ?", userID, ids).Updates(map[string]any{"category_id": target.ID, "version": gorm.Expr("version+1")}).Error; err != nil {
 			return nil, err
 		}
+		if err := mergePlanningCategories(tx, userID, ids, target.ID); err != nil {
+			return nil, err
+		}
 		for _, c := range records {
 			for _, sourceID := range ids {
 				if c.ID == sourceID {
