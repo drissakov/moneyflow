@@ -20,6 +20,8 @@ import androidx.compose.ui.unit.dp
 import com.moneyflow.app.data.domain.*
 import com.moneyflow.app.data.remote.LedgerFilter
 import java.math.BigInteger
+import java.math.MathContext
+import java.math.RoundingMode
 import java.time.Instant
 import java.time.YearMonth
 import java.time.ZoneOffset
@@ -326,7 +328,10 @@ internal fun analyticsHistoryFilter(state: AdvancedAnalyticsUiState, kind: Strin
 
 internal fun analyticsConversionRateText(rate: AdvancedAnalyticsRate): String {
     val date = rate.rateDate?.let { value -> runCatching { java.time.LocalDate.parse(value).format(DateTimeFormatter.ofPattern("dd.MM.yyyy")) }.getOrDefault(value) }
-    return "1 ${rate.currency} = ${rate.rate.stripTrailingZeros().toPlainString().replace('.', ',')} KZT" +
+    val rounded = rate.rate.setScale(6, RoundingMode.HALF_EVEN)
+    val displayed = if (rounded.signum() == 0) rate.rate.round(MathContext(6, RoundingMode.HALF_EVEN)).stripTrailingZeros().toEngineeringString()
+        else rounded.stripTrailingZeros().toPlainString()
+    return "1 ${rate.currency} ${if (rate.currency == "KZT") "=" else "≈"} ${displayed.replace('.', ',')} KZT" +
         (date?.let { " · $it" } ?: if (rate.currency == "KZT") " · базовая валюта" else " · дата курса не указана")
 }
 

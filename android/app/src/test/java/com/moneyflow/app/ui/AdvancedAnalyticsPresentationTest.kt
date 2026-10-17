@@ -87,12 +87,16 @@ class AdvancedAnalyticsPresentationTest {
         filter.validate()
     }
 
-    @Test fun rateCaptionPreservesDecimalPrecisionAndExposesPerCurrencyDate() {
-        assertEquals("1 USD = 486,123456789 KZT · 16.10.2026",
+    @Test fun rateCaptionIsReadableAndExposesPerCurrencyDateWithoutZeroingSmallRates() {
+        assertEquals("1 USD ≈ 486,123457 KZT · 16.10.2026",
             analyticsConversionRateText(AdvancedAnalyticsRate("USD", BigDecimal("486.123456789000"), "2026-10-16")))
-        assertEquals("1 EUR = 500 KZT · дата курса не указана",
+        assertEquals("1 EUR ≈ 500 KZT · дата курса не указана",
             analyticsConversionRateText(AdvancedAnalyticsRate("EUR", BigDecimal("5E+2"), null)))
         assertEquals("1 KZT = 1 KZT · базовая валюта",
             analyticsConversionRateText(AdvancedAnalyticsRate("KZT", BigDecimal.ONE, null)))
+        assertEquals("1 USD ≈ 1,23457E-12 KZT · 16.10.2026",
+            analyticsConversionRateText(AdvancedAnalyticsRate("USD", BigDecimal("0.00000000000123456789"), "2026-10-16")))
+        assertEquals("1 EUR ≈ 1,234564 KZT · 16.10.2026",
+            analyticsConversionRateText(AdvancedAnalyticsRate("EUR", BigDecimal("1.2345645"), "2026-10-16")))
     }
 }
