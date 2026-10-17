@@ -57,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -92,23 +93,27 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel, openPlanning: Boolean = false, o
     val imports: ImportViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = ImportViewModel.factory(app, app.repository))
     val ledger: LedgerViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = LedgerViewModel.Factory(app, app.repository))
     val planning: PlanningViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = PlanningViewModel.Factory(app, app.repository))
+    val reports: AdvancedAnalyticsViewModel = androidx.lifecycle.viewmodel.compose.viewModel(factory = AdvancedAnalyticsViewModel.Factory(app, app.repository))
     val importState by imports.state.collectAsStateWithLifecycle()
     val ledgerState by ledger.state.collectAsStateWithLifecycle()
     val planningState by planning.state.collectAsStateWithLifecycle()
+    val reportsState by reports.state.collectAsStateWithLifecycle()
     val importBlocksWrites = importState.busy || importState.pending != null || importState.recoveryUnavailable || importState.recoveryChecking ||
         (state.session != null && state.session?.token != importState.session?.token)
     val ledgerBlocksWrites = ledgerState.busy || ledgerState.pending != null || ledgerState.recoveryChecking || ledgerState.recoveryUnavailable
     SideEffect {
         ledger.setExternalBlocked(importBlocksWrites || planningState.busy || state.working || state.categoryWorking)
         planning.setExternalBlocked(importBlocksWrites || ledgerState.busy || state.working || state.categoryWorking)
-        ledger.onMutation { viewModel.refresh(); planning.refresh() }
-        planning.onMutation { viewModel.refresh(); ledger.refresh() }
-        imports.onMutation { accountId -> viewModel.onImportedFinancialDataChanged(accountId); ledger.refresh(); planning.refresh() }
+        ledger.onMutation { viewModel.refresh(); planning.refresh(); reports.refresh() }
+        planning.onMutation { viewModel.refresh(); ledger.refresh(); reports.refresh() }
+        imports.onMutation { accountId -> viewModel.onImportedFinancialDataChanged(accountId); ledger.refresh(); planning.refresh(); reports.refresh() }
     }
     var dialog by rememberSaveable(state.session?.token) { mutableStateOf<String?>(null) }
     var screen by rememberSaveable(state.session?.token) { mutableStateOf("overview") }
     var ledgerAction by rememberSaveable(state.session?.token) { mutableStateOf<String?>(null) }
-    LaunchedEffect(state.mutationVersion) { if (state.session != null) { ledger.refresh(); planning.refresh() } }
+    var historyFromReports by rememberSaveable(state.session?.token) { mutableStateOf(false) }
+    LaunchedEffect(state.mutationVersion) { if (state.session != null) { ledger.refresh(); planning.refresh(); reports.refresh() } }
+    LaunchedEffect(screen, state.session?.token) { if (screen == "analytics" && state.session != null) reports.refresh() }
     LaunchedEffect(state.baseCurrency, state.basePreferencePending, state.session?.token) {
         if (state.session != null && !state.basePreferencePending) planning.refresh()
     }
@@ -116,8 +121,9 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel, openPlanning: Boolean = false, o
         if (openPlanning && state.session != null) { screen = "planning"; onPlanningOpened() }
     }
     androidx.activity.compose.BackHandler(enabled = screen in listOf("categories", "imports", "planning")) { screen = "more" }
+    androidx.activity.compose.BackHandler(enabled = screen == "history" && historyFromReports) { screen = "analytics"; historyFromReports = false }
     val selectedTab = if (screen in listOf("categories", "imports", "planning")) "more" else screen
-    val openLedger: (String?) -> Unit = { action -> ledgerAction = action; screen = "history" }
+    val openLedger: (String?) -> Unit = { action -> historyFromReports = false; ledgerAction = action; screen = "history" }
     Scaffold(
         modifier = Modifier.semantics { testTagsAsResourceId = true },
         containerColor = MaterialTheme.colorScheme.background,
@@ -129,18 +135,21 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel, openPlanning: Boolean = false, o
                 Column(Modifier.weight(1f)) {
                     Text("moneyflow", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold,
                         letterSpacing = (-.6).sp)
-                    Text(if (screen in listOf("categories", "imports", "planning")) "Ещё / ${when (screen) { "categories" -> "Категории"; "planning" -> "Планирование"; else -> "Импорт" }}" else "ЛИЧНАЯ ЭКОНОМИКА",
+                    Text(if (screen == "history" && historyFromReports) "Отчёты / Операции"
+                        else if (screen in listOf("categories", "imports", "planning")) "Ещё / ${when (screen) { "categories" -> "Категории"; "planning" -> "Планирование"; else -> "Импорт" }}" else "ЛИЧНАЯ ЭКОНОМИКА",
                         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 if (state.session != null) {
                     if (screen in listOf("categories", "imports", "planning")) TextButton(onClick = { screen = "more" }) { Text("Назад") }
+                    if (screen == "history" && historyFromReports) TextButton(onClick = { screen = "analytics"; historyFromReports = false },
+                        modifier = Modifier.testTag("analytics_history_back")) { Text("К отчёту") }
                     IconButton(onClick = {
                         when (screen) {
-                            "analytics" -> viewModel.refreshAnalytics()
+                            "analytics" -> reports.refresh()
                             "history", "accounts", "categories" -> ledger.refresh()
                             "imports" -> imports.refreshHistory()
                             "planning" -> planning.refresh()
-                            else -> { viewModel.refresh(); ledger.refresh(); planning.refresh() }
+                            else -> { viewModel.refresh(); ledger.refresh(); planning.refresh(); reports.refresh() }
                         }
                     }, enabled = !state.refreshing && !state.working && !ledgerState.busy,
                         modifier = Modifier.testTag("refresh")) {
@@ -159,7 +168,7 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel, openPlanning: Boolean = false, o
                             Triple("accounts", "Счета", NavigationIcons.Overview),
                             Triple("analytics", "Отчёты", NavigationIcons.Analytics),
                             Triple("more", "Ещё", NavigationIcons.More)).forEach { (key, label, image) ->
-                            NavigationBarItem(selected = selectedTab == key, onClick = { screen = key },
+                            NavigationBarItem(selected = selectedTab == key, onClick = { historyFromReports = false; screen = key },
                                 icon = { Icon(image, contentDescription = null, modifier = Modifier.size(21.dp)) },
                                 label = { Text(label, style = MaterialTheme.typography.labelSmall,
                                     fontWeight = if (selectedTab == key) FontWeight.Bold else FontWeight.Medium) },
@@ -178,6 +187,7 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel, openPlanning: Boolean = false, o
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
             androidx.compose.runtime.key(state.session?.token) {
+            val reportsSaveableState = rememberSaveableStateHolder()
             when {
                 state.starting -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 state.session == null -> AuthScreen(state, viewModel)
@@ -187,9 +197,18 @@ fun MoneyFlowApp(viewModel: MoneyFlowViewModel, openPlanning: Boolean = false, o
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
                 screen == "planning" && planningState.session?.token != state.session?.token ->
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
+                screen == "analytics" && reportsState.session?.token != state.session?.token ->
+                    CircularProgressIndicator(Modifier.align(Alignment.Center))
                 screen == "history" -> LedgerScreen(ledgerState, ledger, ledgerAction) { ledgerAction = null }
                 screen == "accounts" -> AccountsManagementScreen(ledgerState, ledger)
-                screen == "analytics" -> AnalyticsScreen(state, viewModel)
+                screen == "analytics" -> reportsSaveableState.SaveableStateProvider("reports") {
+                    AdvancedAnalyticsScreen(reportsState, reports) { filter ->
+                        ledgerAction = null
+                        ledger.setFilter(filter)
+                        historyFromReports = true
+                        screen = "history"
+                    }
+                }
                 screen == "categories" -> CategoriesManagementScreen(ledgerState, ledger)
                 screen == "imports" -> ImportsScreen(importState, imports, state.pending != null || ledgerBlocksWrites || planningState.busy)
                 screen == "planning" -> PlanningScreen(planningState, planning)

@@ -153,9 +153,10 @@ class FxRepositoryTest {
     private fun auth(id: String, email: String) = AuthResponse("token-$id", Instant.now().plusSeconds(3600).toString(), User(id, email))
 
     private abstract class StubApi : MoneyFlowApi {
+        override suspend fun analyticsDashboard(month: String, currency: String, months: Int, accountId: String?, authorization: String): AdvancedAnalyticsReportDto = error("Unused dashboard API")
         override suspend fun planning(from: String, to: String, authorization: String): PlanningResponseDto = error("Unused planning API")
         override suspend fun forecast(until: String?, authorization: String): ForecastResponseDto = error("Unused forecast API")
-        override suspend fun history(accountId: String?, limit: Int, cursor: String?, query: String?, from: String?, to: String?, categoryId: String?, kind: String?, includeDeleted: Boolean, authorization: String): TransactionsResponse = error("Unused P0 history API")
+        override suspend fun history(accountId: String?, limit: Int, cursor: String?, query: String?, from: String?, to: String?, categoryId: String?, kind: String?, includeDeleted: Boolean, authorization: String, currency: String?, analyticsOnly: Boolean, uncategorized: Boolean, categoryExact: Boolean): TransactionsResponse = error("Unused P0 history API")
         override suspend fun transfer(id: String, authorization: String): TransferDto = error("Unused P0 transfer API")
         override suspend fun ledgerPut(path: String, body: RequestBody, key: String, authorization: String): JsonObject = error("Unused P0 mutation API")
         override suspend fun ledgerPost(path: String, body: RequestBody, key: String, authorization: String): JsonObject = error("Unused P0 mutation API")

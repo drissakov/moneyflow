@@ -21,9 +21,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.moneyflow.app.data.domain.MoneyTransaction
 import com.moneyflow.app.data.domain.MoneyTransfer
+import com.moneyflow.app.data.domain.SupportedCurrency
 import com.moneyflow.app.data.remote.LedgerFilter
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -62,7 +62,11 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
 
     LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize().testTag("ledger_screen"),
         contentPadding = PaddingValues(20.dp, 14.dp, 20.dp, 36.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item(key = "heading") { P0Heading("02", "История\nв деталях.", "Все счета. Каждая операция. В одном месте.") }
+        item(key = "heading") {
+            P0Heading("02", if (state.filter.analyticsOnly) "За цифрами —\nоперации." else "История\nв деталях.",
+                if (state.filter.analyticsOnly) "Операции выбранного отчёта. Даты — по времени Казахстана, UTC+5."
+                else "Все счета. Каждая операция. В одном месте.")
+        }
         item(key = "actions") {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { viewModel.clearMessage(); selectedId = null; editor = "create" }, enabled = state.canWrite && activeAccounts.isNotEmpty(),
@@ -82,6 +86,8 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
         }
         item(key = "filters") {
             val count = listOf(state.filter.accountId, state.filter.categoryId, state.filter.kind, state.filter.from, state.filter.to,
+                state.filter.currency, if (state.filter.analyticsOnly) "analytics" else null,
+                if (state.filter.uncategorized) "uncategorized" else null, if (state.filter.categoryExact) "exact" else null,
                 if (state.filter.showDeleted) "deleted" else null).count { it != null }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 FilterChip(count > 0, onClick = { editor = "filters" }, label = { Text(if (count > 0) "Фильтры · $count" else "Фильтры ↗") },
@@ -91,6 +97,21 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
             }
             state.accounts.firstOrNull { it.id == state.filter.accountId }?.let {
                 Text("Счёт: ${it.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            state.filter.currency?.let { Text("Валюта: $it", style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("ledger_scope_currency")) }
+            if (state.filter.uncategorized || state.filter.categoryId != null) {
+                Text(if (state.filter.uncategorized) "Без категории" else
+                    categoryPath(state.filter.categoryId, state.categories) + if (state.filter.categoryExact) " · без подкатегорий" else " · включая подкатегории",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("ledger_scope_category"))
+            }
+            if (state.filter.analyticsOnly) {
+                val start = state.filter.from?.let { ledgerFilterDate(it, true) }
+                val end = state.filter.to?.let { LocalDate.parse(ledgerFilterDate(it, true)).minusDays(1).toString() }
+                Text(listOfNotNull(start, end).joinToString(" — ") + " · Только включённые в отчёты",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("ledger_scope_report"))
             }
         }
         if (state.pending != null || state.manualPending || state.recoveryUnavailable) item(key = "recovery") {
@@ -119,11 +140,11 @@ internal fun LedgerScreen(state: LedgerUiState, viewModel: LedgerViewModel,
                 }
             }
         }
-        val grouped = state.transactions.groupBy { p0LocalDate(it.occurredAt) }
+        val grouped = state.transactions.groupBy { ledgerFilterDate(it.occurredAt, state.filter.analyticsOnly) }
         grouped.forEach { (date, transactions) ->
             item(key = "date_$date") {
                 Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(ledgerDay(date), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Text(ledgerDay(date, state.filter.analyticsOnly), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                     HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant)
                     Text(transactions.size.toString().padStart(2, '0'), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -187,7 +208,7 @@ private fun LedgerRow(transaction: MoneyTransaction, state: LedgerUiState, enabl
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(title, style = MaterialTheme.typography.titleMedium,
                         textDecoration = if (deleted) TextDecoration.LineThrough else null)
-                    Text("${account?.name ?: "Счёт"} · ${p0LocalTime(transaction.occurredAt)}", style = MaterialTheme.typography.bodySmall,
+                    Text("${account?.name ?: "Счёт"} · ${ledgerFilterTime(transaction.occurredAt, state.filter.analyticsOnly)}", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (movement && transaction.note.isNotBlank()) Text(transaction.note, style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -206,9 +227,10 @@ private fun LedgerRow(transaction: MoneyTransaction, state: LedgerUiState, enabl
     }
 }
 
-private fun ledgerDay(iso: String): String {
+private fun ledgerDay(iso: String, reportScope: Boolean): String {
     val date = runCatching { LocalDate.parse(iso) }.getOrNull() ?: return iso
-    return when (date) { LocalDate.now() -> "Сегодня"; LocalDate.now().minusDays(1) -> "Вчера"
+    val today = LocalDate.now(ledgerFilterZone(reportScope))
+    return when (date) { today -> "Сегодня"; today.minusDays(1) -> "Вчера"
         else -> date.format(DateTimeFormatter.ofPattern("d MMMM yyyy", Locale.forLanguageTag("ru"))) }
 }
 
@@ -217,33 +239,46 @@ private fun ledgerDay(iso: String): String {
 private fun P0LedgerFilters(state: LedgerUiState, viewModel: LedgerViewModel, onDismiss: () -> Unit) {
     var filter by remember { mutableStateOf(state.filter) }
     var picker by remember { mutableStateOf<String?>(null) }
-    var fromDate by remember { mutableStateOf(filter.from?.let(::p0LocalDate).orEmpty()) }
-    var toDate by remember { mutableStateOf(filter.to?.let { LocalDate.parse(p0LocalDate(it)).minusDays(1).toString() }.orEmpty()) }
+    var fromDate by remember { mutableStateOf(filter.from?.let { ledgerFilterDate(it, filter.analyticsOnly) }.orEmpty()) }
+    var toDate by remember { mutableStateOf(filter.to?.let { LocalDate.parse(ledgerFilterDate(it, filter.analyticsOnly)).minusDays(1).toString() }.orEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     P0Sheet("ledger_filter_sheet", "Найти нужное.", "История / фильтры", false, onDismiss) {
         P0Choice("Счёт", state.accounts.firstOrNull { it.id == filter.accountId }?.name ?: "Все счета", "ledger_filter_account") { picker = "account" }
+        P0Choice("Валюта операций", filter.currency ?: "Все валюты", "ledger_filter_currency") { picker = "currency" }
         Text("Тип операции", style = MaterialTheme.typography.labelMedium)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(null to "Все", "expense" to "Расход", "income" to "Доход").forEach { (kind, name) ->
-                FilterChip(filter.kind == kind, { filter = filter.copy(kind = kind, categoryId = null) }, label = { Text(name) }, modifier = Modifier.testTag("ledger_filter_kind_${kind ?: "all"}"))
+                FilterChip(filter.kind == kind, { filter = filter.copy(kind = kind, categoryId = null, uncategorized = false, categoryExact = false) }, label = { Text(name) }, modifier = Modifier.testTag("ledger_filter_kind_${kind ?: "all"}"))
             }
         }
-        P0Choice("Категория", state.categories.firstOrNull { it.id == filter.categoryId }?.let { categoryPath(it.id, state.categories) } ?: "Все категории", "ledger_filter_category") { picker = "category" }
+        P0Choice("Категория", if (filter.uncategorized) "Без категории" else state.categories.firstOrNull { it.id == filter.categoryId }?.let { categoryPath(it.id, state.categories) } ?: "Все категории", "ledger_filter_category") { picker = "category" }
+        if (filter.categoryId != null) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(filter.categoryExact, { filter = filter.copy(categoryExact = it) }, modifier = Modifier.testTag("ledger_filter_exact"))
+            Text("Только эта категория, без подкатегорий", Modifier.weight(1f))
+        }
         OutlinedTextField(fromDate, { fromDate = it }, label = { Text("С даты · ГГГГ-ММ-ДД") }, singleLine = true,
             shape = P0Shape, modifier = Modifier.fillMaxWidth().testTag("ledger_filter_from"))
         OutlinedTextField(toDate, { toDate = it }, label = { Text("По дату включительно · ГГГГ-ММ-ДД") }, singleLine = true,
             shape = P0Shape, modifier = Modifier.fillMaxWidth().testTag("ledger_filter_to"))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(filter.showDeleted, { filter = filter.copy(showDeleted = it) }, modifier = Modifier.testTag("ledger_filter_deleted"))
+            Checkbox(filter.showDeleted, { filter = filter.copy(showDeleted = it) }, enabled = !filter.analyticsOnly, modifier = Modifier.testTag("ledger_filter_deleted"))
             Text("Показывать удалённые", Modifier.weight(1f))
         }
         Text("Удалённые операции можно восстановить. Переводы восстанавливаются целиком.", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(filter.analyticsOnly, { checked ->
+                filter = filter.copy(analyticsOnly = checked, showDeleted = if (checked) false else filter.showDeleted)
+            }, modifier = Modifier.testTag("ledger_filter_analytics"))
+            Text("Только включённые в отчёты", Modifier.weight(1f))
+        }
+        if (filter.analyticsOnly) Text("Без удалённых и исключённых операций и основных сумм собственных переводов. Комиссии учитываются как расходы. Даты: UTC+5.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         error?.let { P0Message(it) }
         P0Submit("Показать операции", "ledger_filter_apply", false) {
             runCatching {
-                val start = fromDate.trim().takeIf(String::isNotBlank)?.let { LocalDate.parse(it).atStartOfDay(ZoneId.systemDefault()).toInstant().toString() }
-                val end = toDate.trim().takeIf(String::isNotBlank)?.let { LocalDate.parse(it).plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toString() }
+                val start = fromDate.trim().takeIf(String::isNotBlank)?.let { ledgerFilterBoundary(it, filter.analyticsOnly, false) }
+                val end = toDate.trim().takeIf(String::isNotBlank)?.let { ledgerFilterBoundary(it, filter.analyticsOnly, true) }
                 require(start == null || end == null || java.time.Instant.parse(start).isBefore(java.time.Instant.parse(end))) { "Конец периода должен быть не раньше начала" }
                 viewModel.setFilter(filter.copy(from = start, to = end)); onDismiss()
             }.onFailure { error = it.message ?: "Проверьте даты" }
@@ -252,9 +287,23 @@ private fun P0LedgerFilters(state: LedgerUiState, viewModel: LedgerViewModel, on
     when (picker) {
         "account" -> P0OptionsSheet("Счёт", listOf(P0Option("", "Все счета")) + state.accounts.map {
             P0Option(it.id, it.name, "${it.currency}${if (it.archived) " · архив" else ""}") }, filter.accountId ?: "", "ledger_filter_accounts",
-            { picker = null }) { filter = filter.copy(accountId = it.ifBlank { null }); picker = null }
-        "category" -> P0OptionsSheet("Категория", listOf(P0Option("", "Все категории")) + state.categories.filter { filter.kind == null || it.kind == filter.kind }.map {
-            P0Option(it.id, categoryPath(it.id, state.categories), if (it.kind == "income") "Доход" else "Расход") }, filter.categoryId ?: "", "ledger_filter_categories",
-            { picker = null }) { filter = filter.copy(categoryId = it.ifBlank { null }); picker = null }
+            { picker = null }) { id ->
+                val account = state.accounts.firstOrNull { it.id == id }
+                filter = filter.copy(accountId = id.ifBlank { null }, currency = if (filter.currency != null && account != null) account.currency else filter.currency)
+                picker = null
+            }
+        "currency" -> P0OptionsSheet("Валюта операций", listOf(P0Option("", "Все валюты")) + SupportedCurrency.entries.map {
+            P0Option(it.code, it.code) }, filter.currency ?: "", "ledger_filter_currencies", { picker = null }) { code ->
+                val currency = code.ifBlank { null }
+                val account = state.accounts.firstOrNull { it.id == filter.accountId }
+                filter = filter.copy(currency = currency, accountId = if (currency != null && account?.currency != currency) null else filter.accountId)
+                picker = null
+            }
+        "category" -> P0OptionsSheet("Категория", listOf(P0Option("", "Все категории"), P0Option("uncategorized", "Без категории")) + state.categories.filter { filter.kind == null || it.kind == filter.kind }.map {
+            P0Option(it.id, categoryPath(it.id, state.categories), if (it.kind == "income") "Доход" else "Расход") }, if (filter.uncategorized) "uncategorized" else filter.categoryId ?: "", "ledger_filter_categories",
+            { picker = null }) { id ->
+                filter = filter.copy(categoryId = id.takeUnless { it.isBlank() || it == "uncategorized" }, uncategorized = id == "uncategorized", categoryExact = false)
+                picker = null
+            }
     }
 }

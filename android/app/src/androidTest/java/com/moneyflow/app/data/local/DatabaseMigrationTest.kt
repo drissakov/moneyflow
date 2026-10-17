@@ -15,6 +15,42 @@ import org.junit.runner.RunWith
 class DatabaseMigrationTest {
     @get:Rule val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), MoneyFlowDatabase::class.java)
 
+    @Test fun migrateSixToSevenPreservesLedgerAndPlanningAndAddsEmptyAnalyticsCache() {
+        val name = "moneyflow-advanced-analytics-migration-test"
+        helper.createDatabase(name, 6).apply {
+            execSQL("INSERT INTO accounts (userId,id,name,currency,openingBalanceMinor,balanceMinor,createdAt,type,archived,includeInBalance,sortOrder,version) VALUES ('user-a','account-a','Cash','KZT',1000,850,'2026-01-01T00:00:00Z','cash',1,0,2,3)")
+            execSQL("INSERT INTO transactions (userId,id,accountId,kind,amountMinor,currency,note,occurredAt,createdAt,version,source,excludeFromAnalytics) VALUES ('user-a','tx-a','account-a','expense',150,'KZT','Coffee','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',2,'manual',1)")
+            execSQL("INSERT INTO planning_snapshots VALUES ('user-a','2026-10','','plan','2026-10-17T00:00:00Z')")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 7, true, MoneyFlowDatabase.MIGRATION_6_7).apply {
+            query("SELECT balanceMinor,archived,includeInBalance,version FROM accounts WHERE id='account-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals(850L, it.getLong(0)); assertEquals(1, it.getInt(1)); assertEquals(0, it.getInt(2)); assertEquals(3L, it.getLong(3))
+            }
+            query("SELECT amountMinor,version,excludeFromAnalytics FROM transactions WHERE id='tx-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals(150L, it.getLong(0)); assertEquals(2L, it.getLong(1)); assertEquals(1, it.getInt(2))
+            }
+            query("SELECT payload FROM planning_snapshots WHERE userId='user-a'").use { assertTrue(it.moveToFirst()); assertEquals("plan", it.getString(0)) }
+            query("SELECT COUNT(*) FROM analytics_snapshots").use { assertTrue(it.moveToFirst()); assertEquals(0L, it.getLong(0)) }
+            close()
+        }
+    }
+
+    @Test fun analyticsSnapshotsAreBoundedAndIsolatedByOwnerAndExactFilter() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(InstrumentationRegistry.getInstrumentation().targetContext,
+            MoneyFlowDatabase::class.java).build()
+        try {
+            val dao = database.dao()
+            repeat(21) { index -> dao.putAnalyticsSnapshot(AnalyticsSnapshotEntity("user-a", "scope-$index", "report-$index", "2026-10-17T00:00:${index.toString().padStart(2, '0')}Z")) }
+            dao.putAnalyticsSnapshot(AnalyticsSnapshotEntity("user-b", "scope-0", "other-owner", "2026-10-17T00:00:00Z"))
+            dao.pruneAnalyticsSnapshots("user-a")
+            assertNull(dao.analyticsSnapshot("user-a", "scope-0")); assertEquals("report-20", dao.analyticsSnapshot("user-a", "scope-20")?.payload)
+            assertEquals("other-owner", dao.analyticsSnapshot("user-b", "scope-0")?.payload)
+            dao.deleteAnalyticsSnapshots("user-a")
+            assertNull(dao.analyticsSnapshot("user-a", "scope-20")); assertEquals("other-owner", dao.analyticsSnapshot("user-b", "scope-0")?.payload)
+        } finally { database.close() }
+    }
+
     @Test fun migrateFiveToSixPreservesFinancialHistoryAndAddsEmptyPlanningCache() {
         val name = "moneyflow-planning-migration-test"
         helper.createDatabase(name, 5).apply {

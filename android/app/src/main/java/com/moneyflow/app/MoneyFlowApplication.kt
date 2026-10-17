@@ -27,7 +27,7 @@ class MoneyFlowApplication : Application() {
     }
     val repository: MoneyFlowRepository by lazy {
         val database = Room.databaseBuilder(this, MoneyFlowDatabase::class.java, "moneyflow.db")
-            .addMigrations(MoneyFlowDatabase.MIGRATION_1_2, MoneyFlowDatabase.MIGRATION_2_3, MoneyFlowDatabase.MIGRATION_3_4, MoneyFlowDatabase.MIGRATION_4_5, MoneyFlowDatabase.MIGRATION_5_6).build()
+            .addMigrations(MoneyFlowDatabase.MIGRATION_1_2, MoneyFlowDatabase.MIGRATION_2_3, MoneyFlowDatabase.MIGRATION_3_4, MoneyFlowDatabase.MIGRATION_4_5, MoneyFlowDatabase.MIGRATION_5_6, MoneyFlowDatabase.MIGRATION_6_7).build()
         MoneyFlowRepository(database, SessionStore(this), ledgerRecovery = EncryptedLedgerRecoveryStore(this),
             importBlocked = { userId -> EncryptedImportRecoveryStore(this).read(userId) != null }, importsApiProvider = { token ->
             ApiFactory.createImports(BuildConfig.API_BASE_URL, token)

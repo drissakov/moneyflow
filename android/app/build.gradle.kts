@@ -28,8 +28,8 @@ android {
         applicationId = "com.moneyflow.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.5.0"
+        versionCode = 8
+        versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

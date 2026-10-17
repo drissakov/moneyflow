@@ -16,6 +16,9 @@ import com.moneyflow.app.data.local.LedgerSnapshotEntity
 import com.moneyflow.app.data.local.CategoryEntity
 import com.moneyflow.app.data.local.PlanningSnapshotEntity
 import com.moneyflow.app.data.domain.PlanningCalendar
+import com.moneyflow.app.data.domain.AdvancedAnalyticsFilter
+import com.moneyflow.app.data.domain.AdvancedAnalyticsReport
+import com.moneyflow.app.data.local.AnalyticsSnapshotEntity
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import okhttp3.MediaType.Companion.toMediaType
@@ -66,6 +69,7 @@ import java.time.ZoneId
 
 data class CachedPortfolio(val portfolio: PortfolioDto, val receivedAt: Instant)
 data class CachedPlanning(val report: PlanningResponseDto, val forecast: ForecastResponseDto, val receivedAt: Instant)
+data class CachedAdvancedAnalytics(val report: AdvancedAnalyticsReport, val receivedAt: Instant)
 private data class PlanningCachePayload(val report: PlanningResponseDto, val forecast: ForecastResponseDto)
 
 class MoneyFlowRepository(
@@ -82,6 +86,7 @@ class MoneyFlowRepository(
     private var portfolioRevision = 0L
     private var ledgerRevision = 0L
     private var planningRevision = 0L
+    private var analyticsRevision = 0L
     private val ledgerMutationMutex = Mutex()
     private val _session = MutableStateFlow(store.readSession())
     val session: StateFlow<Session?> = _session.asStateFlow()
@@ -154,6 +159,7 @@ class MoneyFlowRepository(
                 ledgerRevision++
                 planningRevision++
                 dao.deletePlanningSnapshots(current.user.id)
+                invalidateAdvancedAnalytics(current.user.id)
                 dao.deleteLedgerSnapshots(current.user.id)
                 dao.deletePortfolios(current.user.id)
                 // Imported or removed entries may be outside the cached latest window.
@@ -203,6 +209,7 @@ class MoneyFlowRepository(
                     dao.putCategories(listOf(CategoryEntity.from(current.user.id, category)))
                     planningRevision++
                     dao.deletePlanningSnapshots(current.user.id)
+                    invalidateAdvancedAnalytics(current.user.id)
                 }
             }
             category
@@ -225,6 +232,7 @@ class MoneyFlowRepository(
                 ledgerRevision++
                 planningRevision++
                 dao.deletePlanningSnapshots(current.user.id)
+                invalidateAdvancedAnalytics(current.user.id)
                 dao.deleteLedgerSnapshots(current.user.id)
                 dao.putTransactions(listOf(TransactionEntity.from(current.user.id, result)))
             }
@@ -393,6 +401,7 @@ class MoneyFlowRepository(
             _ledgerRecoveryUnavailable.value = false
             ledgerRevision++
             planningRevision++
+            analyticsRevision++
             if (userId != null) database.withTransaction {
                 dao.deleteAccounts(userId)
                 dao.deleteUserTransactions(userId)
@@ -400,6 +409,7 @@ class MoneyFlowRepository(
                 dao.deletePortfolios(userId)
                 dao.deleteCategories(userId)
                 dao.deletePlanningSnapshots(userId)
+                dao.deleteAnalyticsSnapshots(userId)
             }
         }
     }
@@ -452,6 +462,7 @@ class MoneyFlowRepository(
                 portfolioRevision++
                 planningRevision++
                 dao.deletePlanningSnapshots(userId)
+                invalidateAdvancedAnalytics(userId)
                 dao.deletePortfolios(userId)
             }
         }
@@ -526,6 +537,7 @@ class MoneyFlowRepository(
                     ledgerRevision++
                     planningRevision++
                     dao.deletePlanningSnapshots(request.userId)
+                    invalidateAdvancedAnalytics(request.userId)
                     portfolioRevision++
                     dao.deletePortfolios(request.userId)
                 }
@@ -565,13 +577,18 @@ class MoneyFlowRepository(
         filter.validate(); require(cursor == null || cursor.length in 1..4096)
         val current = requireSession(); val revision = mutex.withLock { ledgerRevision }
         val result = api.history(filter.accountId, 50, cursor, filter.query.trim().takeIf { it.isNotEmpty() },
-            filter.from, filter.to, filter.categoryId, filter.kind, filter.showDeleted, "Bearer ${current.token}")
+            filter.from, filter.to, filter.categoryId, filter.kind, filter.showDeleted, "Bearer ${current.token}",
+            filter.currency, filter.analyticsOnly, filter.uncategorized, filter.categoryExact)
         val rows = result.transactions.map(TransactionDto::toDomain)
         require(rows.size <= 50 && rows.map { it.id }.distinct().size == rows.size)
         rows.forEach {
             require(filter.accountId == null || it.accountId == filter.accountId)
             require(filter.kind == null || it.kind == filter.kind)
             require(filter.showDeleted || it.deletedAt == null)
+            require(filter.currency == null || filter.currency == it.currency)
+            require(!filter.analyticsOnly || !it.excludeFromAnalytics)
+            require(!filter.uncategorized || it.categoryId == null)
+            require(!filter.categoryExact || it.categoryId == filter.categoryId)
             filter.from?.let { from -> require(Instant.parse(it.occurredAt) >= Instant.parse(from)) }
             filter.to?.let { to -> require(Instant.parse(it.occurredAt) < Instant.parse(to)) }
         }
@@ -591,6 +608,37 @@ class MoneyFlowRepository(
         val result = api.transfer(id, "Bearer ${current.token}").toDomain()
         require(result.id == id); check(isCurrentSession(current)) { "Сессия изменилась" }
         return result
+    }
+
+    suspend fun advancedAnalytics(filter: AdvancedAnalyticsFilter): CachedAdvancedAnalytics {
+        filter.validate()
+        val current = requireSession(); val revision = mutex.withLock { analyticsRevision }
+        val response = api.analyticsDashboard(filter.month, filter.currency, filter.months, filter.accountId, "Bearer ${current.token}")
+        val result = CachedAdvancedAnalytics(response.toDomain(filter), Instant.now())
+        mutex.withLock {
+            check(isCurrentSession(current) && analyticsRevision == revision) { "Данные изменились; обновите отчёт" }
+            database.withTransaction {
+                dao.putAnalyticsSnapshot(AnalyticsSnapshotEntity(current.user.id, Gson().toJson(filter), Gson().toJson(response), result.receivedAt.toString()))
+                dao.pruneAnalyticsSnapshots(current.user.id)
+            }
+        }
+        return result
+    }
+
+    suspend fun cachedAdvancedAnalytics(filter: AdvancedAnalyticsFilter): CachedAdvancedAnalytics? {
+        filter.validate(); val current = requireSession()
+        val row = dao.analyticsSnapshot(current.user.id, Gson().toJson(filter)) ?: return null
+        check(isCurrentSession(current)) { "Сессия изменилась" }
+        return runCatching {
+            val report = Gson().fromJson(row.payload, AdvancedAnalyticsReportDto::class.java).toDomain(filter)
+            CachedAdvancedAnalytics(report, Instant.parse(row.receivedAt))
+        }.getOrNull()
+    }
+
+    /** Call under the repository mutex and the same transaction as the acknowledged financial write. */
+    private suspend fun invalidateAdvancedAnalytics(userId: String) {
+        analyticsRevision++
+        dao.deleteAnalyticsSnapshots(userId)
     }
 
     /** The server owns every total; the device only validates and caches the matching read. */
@@ -703,6 +751,7 @@ class MoneyFlowRepository(
                 ledgerRevision++; portfolioRevision++
                 planningRevision++
                 dao.deletePlanningSnapshots(current.user.id)
+                invalidateAdvancedAnalytics(current.user.id)
                 dao.deleteUserTransactions(current.user.id)
                 dao.deleteLedgerSnapshots(current.user.id)
                 dao.deletePortfolios(current.user.id)

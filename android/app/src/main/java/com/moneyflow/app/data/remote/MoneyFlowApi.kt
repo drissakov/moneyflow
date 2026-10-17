@@ -125,6 +125,13 @@ data class ErrorBody(val error: ErrorDetail)
 data class ErrorDetail(val code: String, val message: String)
 
 interface MoneyFlowApi {
+    @GET("api/v1/analytics/dashboard") suspend fun analyticsDashboard(
+        @Query("month") month: String,
+        @Query("currency") currency: String,
+        @Query("months") months: Int,
+        @Query("account_id") accountId: String?,
+        @Header("Authorization") authorization: String,
+    ): AdvancedAnalyticsReportDto
     @GET("api/v1/planning") suspend fun planning(
         @Query("from") from: String,
         @Query("to") to: String,
@@ -145,6 +152,10 @@ interface MoneyFlowApi {
         @Query("kind") kind: String? = null,
         @Query("include_deleted") includeDeleted: Boolean = false,
         @Header("Authorization") authorization: String,
+        @Query("currency") currency: String? = null,
+        @Query("analytics_only") analyticsOnly: Boolean = false,
+        @Query("uncategorized") uncategorized: Boolean = false,
+        @Query("category_exact") categoryExact: Boolean = false,
     ): TransactionsResponse
     @GET("api/v1/transfers/{id}") suspend fun transfer(@Path("id") id: String,
         @Header("Authorization") authorization: String): TransferDto

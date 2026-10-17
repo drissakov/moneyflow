@@ -6,7 +6,7 @@ The app has Russian UI and supports 11 curated currencies: KZT, USD, EUR, JPY,
 KWD, RUB, GBP, CHF, AUD, CAD and CNY. This is the application's supported catalog,
 not the full upstream provider catalog.
 
-Version 0.5.0 uses a monochrome Material 3 palette in both system light and dark
+Version 0.6.0 uses a monochrome Material 3 palette in both system light and dark
 themes. The aggregate balance of all accounts leads the overview, valued in KZT
 by default; changing the selected account only changes its transaction list.
 Individual accounts show their original and converted balances; calculation
@@ -58,6 +58,27 @@ is preserved. Movements affect balances and stay out of income/expense charts.
 Migration 4 → 5 adds the versioned ledger caches; 5 → 6 adds user-scoped planning
 snapshots without recreating existing tables. The server must apply migration
 006 before this app uses budgets, schedules and forecasts.
+Migration 6 → 7 adds owner/filter-scoped analytics snapshots. Advanced reports
+need the updated API, with no additional server migration beyond 006.
+
+## Advanced reports (P1)
+
+Reports has Comparison, Balance and Categories modes with shared month, original
+currency and optional single-account filters. Comparison and balance cover 3, 6
+or 12 months; month boundaries are fixed to Kazakhstan UTC+5. Filled/hatched bars
+and textual rows distinguish income and expense in both monochrome themes.
+
+Balances are reconstructed from current opening balances and the whole saved
+ledger, including history before the visible window. Transfers and excluded
+movements affect balances; income/expense excludes them and includes transfer
+fees. No historical FX valuation is invented. Current months are marked as
+unfinished and include already-recorded future-dated transactions; unconfirmed
+plans do not count.
+
+Category, subcategory, direct-parent and uncategorized actions open the ledger
+with matching currency/account/kind/date and analytics-only filters. Returning to
+Reports restores its mode/selection. Offline snapshots are read-only and labeled
+with their receipt time. See [calculation rules and QA](../docs/ANALYTICS.md).
 
 ## Planning (P1)
 

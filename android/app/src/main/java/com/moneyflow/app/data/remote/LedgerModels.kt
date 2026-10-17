@@ -17,9 +17,17 @@ data class LedgerFilter(
     val from: String? = null,
     val to: String? = null,
     val showDeleted: Boolean = false,
+    val currency: String? = null,
+    val analyticsOnly: Boolean = false,
+    val uncategorized: Boolean = false,
+    val categoryExact: Boolean = false,
 ) {
     fun validate() {
         accountId?.let(::validateUuid); categoryId?.let(::validateUuid)
+        currency?.let { SupportedCurrency.fromCode(it) }
+        require(!uncategorized || categoryId == null) { "Выберите категорию или операции без категории" }
+        require(!categoryExact || categoryId != null) { "Для точного фильтра выберите категорию" }
+        require(!analyticsOnly || !showDeleted) { "Удалённые операции не входят в отчёт" }
         require(kind == null || kind in setOf("expense", "income"))
         require(query.codePointCount(0, query.length) <= 100) { "Поиск: не больше 100 символов" }
         val start = from?.let(Instant::parse); val end = to?.let(Instant::parse)
