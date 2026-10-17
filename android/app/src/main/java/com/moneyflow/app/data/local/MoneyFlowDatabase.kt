@@ -105,8 +105,21 @@ data class PortfolioSnapshotEntity(
 @Entity(tableName = "ledger_snapshots", primaryKeys = ["userId", "filterKey"])
 data class LedgerSnapshotEntity(val userId: String, val filterKey: String, val payload: String, val receivedAt: String)
 
+/** A read-only server calculation. Financial writes never use this cached payload as input. */
+@Entity(tableName = "planning_snapshots", primaryKeys = ["userId", "month", "forecastUntil"])
+data class PlanningSnapshotEntity(val userId: String, val month: String, val forecastUntil: String,
+    val payload: String, val receivedAt: String)
+
 @Dao
 interface MoneyFlowDao {
+    @Query("SELECT * FROM planning_snapshots WHERE userId = :userId AND month = :month AND forecastUntil = :forecastUntil LIMIT 1")
+    suspend fun planningSnapshot(userId: String, month: String, forecastUntil: String): PlanningSnapshotEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putPlanningSnapshot(snapshot: PlanningSnapshotEntity)
+    @Query("DELETE FROM planning_snapshots WHERE userId = :userId")
+    suspend fun deletePlanningSnapshots(userId: String)
+    @Query("DELETE FROM planning_snapshots WHERE userId = :userId AND (month || ':' || forecastUntil) NOT IN (SELECT month || ':' || forecastUntil FROM planning_snapshots WHERE userId = :userId ORDER BY receivedAt DESC LIMIT 12)")
+    suspend fun prunePlanningSnapshots(userId: String)
     @Query("SELECT * FROM ledger_snapshots WHERE userId = :userId AND filterKey = :filterKey LIMIT 1")
     suspend fun ledgerSnapshot(userId: String, filterKey: String): LedgerSnapshotEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -172,11 +185,16 @@ interface MoneyFlowDao {
 }
 
 @Database(entities = [AccountEntity::class, TransactionEntity::class, FxPreferencesEntity::class,
-    PortfolioSnapshotEntity::class, CategoryEntity::class, LedgerSnapshotEntity::class], version = 5, exportSchema = true)
+    PortfolioSnapshotEntity::class, CategoryEntity::class, LedgerSnapshotEntity::class, PlanningSnapshotEntity::class], version = 6, exportSchema = true)
 abstract class MoneyFlowDatabase : RoomDatabase() {
     abstract fun dao(): MoneyFlowDao
 
     companion object {
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `planning_snapshots` (`userId` TEXT NOT NULL, `month` TEXT NOT NULL, `forecastUntil` TEXT NOT NULL, `payload` TEXT NOT NULL, `receivedAt` TEXT NOT NULL, PRIMARY KEY(`userId`, `month`, `forecastUntil`))")
+            }
+        }
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE `accounts` ADD COLUMN `type` TEXT NOT NULL DEFAULT 'card'")

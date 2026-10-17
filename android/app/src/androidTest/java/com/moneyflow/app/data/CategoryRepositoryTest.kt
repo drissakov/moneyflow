@@ -144,6 +144,8 @@ class CategoryRepositoryTest {
     }
 
     private abstract inner class StubApi : MoneyFlowApi {
+        override suspend fun planning(from: String, to: String, authorization: String): PlanningResponseDto = error("Unused planning API")
+        override suspend fun forecast(until: String?, authorization: String): ForecastResponseDto = error("Unused forecast API")
         override suspend fun login(credentials: Credentials): AuthResponse {
             val id = if (credentials.email.startsWith("a@")) userA else userB
             return AuthResponse("token-$id", Instant.now().plusSeconds(3600).toString(), User(id, credentials.email))

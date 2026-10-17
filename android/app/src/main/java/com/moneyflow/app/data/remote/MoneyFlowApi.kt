@@ -125,6 +125,15 @@ data class ErrorBody(val error: ErrorDetail)
 data class ErrorDetail(val code: String, val message: String)
 
 interface MoneyFlowApi {
+    @GET("api/v1/planning") suspend fun planning(
+        @Query("from") from: String,
+        @Query("to") to: String,
+        @Header("Authorization") authorization: String,
+    ): PlanningResponseDto
+    @GET("api/v1/planning/forecast") suspend fun forecast(
+        @Query("until") until: String? = null,
+        @Header("Authorization") authorization: String,
+    ): ForecastResponseDto
     @GET("api/v1/transactions") suspend fun history(
         @Query("account_id") accountId: String? = null,
         @Query("limit") limit: Int = 50,

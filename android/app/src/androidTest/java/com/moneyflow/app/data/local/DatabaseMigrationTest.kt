@@ -15,6 +15,45 @@ import org.junit.runner.RunWith
 class DatabaseMigrationTest {
     @get:Rule val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), MoneyFlowDatabase::class.java)
 
+    @Test fun migrateFiveToSixPreservesFinancialHistoryAndAddsEmptyPlanningCache() {
+        val name = "moneyflow-planning-migration-test"
+        helper.createDatabase(name, 5).apply {
+            execSQL("INSERT INTO accounts (userId,id,name,currency,openingBalanceMinor,balanceMinor,createdAt,type,archived,includeInBalance,sortOrder,version) VALUES ('user-a','account-a','Cash','KZT',1000,850,'2026-01-01T00:00:00Z','cash',0,1,2,3)")
+            execSQL("INSERT INTO transactions (userId,id,accountId,kind,amountMinor,currency,note,occurredAt,createdAt,version,source) VALUES ('user-a','tx-a','account-a','expense',150,'KZT','Coffee','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z',2,'manual')")
+            execSQL("INSERT INTO ledger_snapshots VALUES ('user-a','filter','history','2026-01-01T00:00:00Z')")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 6, true, MoneyFlowDatabase.MIGRATION_5_6).apply {
+            query("SELECT balanceMinor,type,sortOrder,version FROM accounts WHERE id='account-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals(850L, it.getLong(0)); assertEquals("cash", it.getString(1))
+                assertEquals(2, it.getInt(2)); assertEquals(3L, it.getLong(3))
+            }
+            query("SELECT amountMinor,version,source FROM transactions WHERE id='tx-a'").use {
+                assertTrue(it.moveToFirst()); assertEquals(150L, it.getLong(0)); assertEquals(2L, it.getLong(1)); assertEquals("manual", it.getString(2))
+            }
+            query("SELECT COUNT(*) FROM planning_snapshots").use { assertTrue(it.moveToFirst()); assertEquals(0L, it.getLong(0)) }
+            query("SELECT payload FROM ledger_snapshots WHERE userId='user-a'").use { assertTrue(it.moveToFirst()); assertEquals("history", it.getString(0)) }
+            close()
+        }
+    }
+
+    @Test fun planningSnapshotsAreIsolatedByOwnerMonthAndForecastHorizon() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(InstrumentationRegistry.getInstrumentation().targetContext,
+            MoneyFlowDatabase::class.java).build()
+        try {
+            val dao = database.dao()
+            dao.putPlanningSnapshot(PlanningSnapshotEntity("user-a", "2026-10", "", "a-oct-auto", "2026-10-01T00:00:00Z"))
+            dao.putPlanningSnapshot(PlanningSnapshotEntity("user-a", "2026-11", "", "a-nov-auto", "2026-10-01T00:00:00Z"))
+            dao.putPlanningSnapshot(PlanningSnapshotEntity("user-a", "2026-10", "2026-11-15", "a-oct-custom", "2026-10-01T00:00:00Z"))
+            dao.putPlanningSnapshot(PlanningSnapshotEntity("user-b", "2026-10", "", "b-oct-auto", "2026-10-01T00:00:00Z"))
+            assertEquals("a-nov-auto", dao.planningSnapshot("user-a", "2026-11", "")?.payload)
+            assertEquals("a-oct-custom", dao.planningSnapshot("user-a", "2026-10", "2026-11-15")?.payload)
+            dao.deletePlanningSnapshots("user-a")
+            assertNull(dao.planningSnapshot("user-a", "2026-10", ""))
+            assertEquals("b-oct-auto", dao.planningSnapshot("user-b", "2026-10", "")?.payload)
+        } finally { database.close() }
+    }
+
     @Test fun migrateFourToFivePreservesHistoryAndDefaultsBeforeP0() {
         val name = "moneyflow-ledger-migration-test"
         helper.createDatabase(name, 4).apply {

@@ -5,6 +5,7 @@ import com.google.gson.JsonParser
 import com.google.gson.annotations.SerializedName
 import com.moneyflow.app.data.domain.MoneyTransfer
 import com.moneyflow.app.data.domain.SupportedCurrency
+import com.moneyflow.app.data.domain.PlanningCalendar
 import java.time.Instant
 
 /** Inclusive from, exclusive to. The opaque cursor belongs only to this exact filter. */
@@ -76,30 +77,49 @@ data class TransferDto(
 
 /** The exact UTF-8 JSON body and key are immutable until acknowledged or definitively rejected. */
 data class PendingLedgerMutation(val userId: String, val key: String, val operation: String,
-    val entityId: String?, val body: String) {
+    val entityId: String?, val body: String, val occurrenceDate: String? = null) {
     fun validate() {
         validateUuid(userId); validateUuid(key); entityId?.let(::validateUuid)
         require(operation in OPERATIONS)
         require(body.toByteArray(Charsets.UTF_8).size in 2..16_384)
         val json = json()
         val create = operation.startsWith("create")
-        require(create == (entityId == null))
-        if (!create) require(json["expected_version"].asLong >= 1)
+        val occurrence = operation in OCCURRENCE_OPERATIONS
+        require((create || operation == "editplanningsettings") == (entityId == null))
+        require(occurrence == (occurrenceDate != null))
+        if (occurrence) {
+            PlanningCalendar.validateDate(requireNotNull(occurrenceDate))
+            require(json["expected_template_version"].asLong >= 1)
+            require(json["expected_occurrence_version"].asLong >= 0)
+        } else if (operation == "editplanningsettings") require(json["expected_version"].asLong >= 0)
+        else if (!create) require(json["expected_version"].asLong >= 1)
+        if (operation in PLANNING_OPERATIONS) validatePlanningMutationBody(operation, json)
     }
     fun json(): JsonObject = JsonParser.parseString(body).asJsonObject
-    val path: String get() = "api/v1/" + when {
-        operation.endsWith("account") -> "accounts" + (entityId?.let { "/$it" } ?: "")
-        operation.endsWith("category") -> "categories" + (entityId?.let { "/$it" } ?: "") + if (operation == "mergecategory") "/merge" else ""
-        operation.endsWith("transaction") -> "transactions/$entityId" + if (operation == "restoretransaction") "/restore" else ""
-        else -> "transfers" + (entityId?.let { "/$it" } ?: "") + if (operation == "restoretransfer") "/restore" else ""
+    val path: String get() = "api/v1/" + when (operation) {
+        "createaccount", "editaccount" -> "accounts" + (entityId?.let { "/$it" } ?: "")
+        "createcategory", "editcategory", "mergecategory" -> "categories" + (entityId?.let { "/$it" } ?: "") + if (operation == "mergecategory") "/merge" else ""
+        "edittransaction", "deletetransaction", "restoretransaction" -> "transactions/$entityId" + if (operation == "restoretransaction") "/restore" else ""
+        "createtransfer", "edittransfer", "deletetransfer", "restoretransfer" -> "transfers" + (entityId?.let { "/$it" } ?: "") + if (operation == "restoretransfer") "/restore" else ""
+        "createbudget", "editbudget" -> "budgets" + (entityId?.let { "/$it" } ?: "")
+        "createschedule", "editschedule" -> "schedules" + (entityId?.let { "/$it" } ?: "")
+        "skipoccurrence" -> "schedules/$entityId/occurrences/$occurrenceDate/skip"
+        "unskipoccurrence" -> "schedules/$entityId/occurrences/$occurrenceDate/unskip"
+        "postoccurrence" -> "schedules/$entityId/occurrences/$occurrenceDate/post"
+        "editplanningsettings" -> "planning/settings"
+        else -> throw IllegalArgumentException("Неизвестный тип подтверждения")
     }
-    val method: String get() = when {
-        operation.startsWith("delete") -> "DELETE"
-        operation.startsWith("edit") -> "PUT"
-        else -> "POST"
+    val method: String get() = when (operation) {
+        "deletetransaction", "deletetransfer" -> "DELETE"
+        "editaccount", "editcategory", "edittransaction", "edittransfer", "editbudget", "editschedule", "editplanningsettings" -> "PUT"
+        "createaccount", "createcategory", "mergecategory", "restoretransaction", "createtransfer", "restoretransfer",
+        "createbudget", "createschedule", "skipoccurrence", "unskipoccurrence", "postoccurrence" -> "POST"
+        else -> throw IllegalArgumentException("Неизвестный тип подтверждения")
     }
     companion object {
+        val OCCURRENCE_OPERATIONS = setOf("skipoccurrence", "unskipoccurrence", "postoccurrence")
+        val PLANNING_OPERATIONS = setOf("createbudget", "editbudget", "createschedule", "editschedule", "editplanningsettings") + OCCURRENCE_OPERATIONS
         val OPERATIONS = setOf("createaccount", "editaccount", "createcategory", "editcategory", "mergecategory",
-            "edittransaction", "deletetransaction", "restoretransaction", "createtransfer", "edittransfer", "deletetransfer", "restoretransfer")
+            "edittransaction", "deletetransaction", "restoretransaction", "createtransfer", "edittransfer", "deletetransfer", "restoretransfer") + PLANNING_OPERATIONS
     }
 }

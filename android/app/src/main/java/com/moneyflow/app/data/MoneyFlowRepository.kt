@@ -14,6 +14,8 @@ import com.moneyflow.app.data.local.FxPreferencesEntity
 import com.moneyflow.app.data.local.PortfolioSnapshotEntity
 import com.moneyflow.app.data.local.LedgerSnapshotEntity
 import com.moneyflow.app.data.local.CategoryEntity
+import com.moneyflow.app.data.local.PlanningSnapshotEntity
+import com.moneyflow.app.data.domain.PlanningCalendar
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import okhttp3.MediaType.Companion.toMediaType
@@ -53,6 +55,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import retrofit2.HttpException
 import java.util.Locale
 import java.util.UUID
@@ -61,6 +65,8 @@ import java.time.YearMonth
 import java.time.ZoneId
 
 data class CachedPortfolio(val portfolio: PortfolioDto, val receivedAt: Instant)
+data class CachedPlanning(val report: PlanningResponseDto, val forecast: ForecastResponseDto, val receivedAt: Instant)
+private data class PlanningCachePayload(val report: PlanningResponseDto, val forecast: ForecastResponseDto)
 
 class MoneyFlowRepository(
     private val database: MoneyFlowDatabase,
@@ -75,6 +81,7 @@ class MoneyFlowRepository(
     private val categorySyncMutex = Mutex()
     private var portfolioRevision = 0L
     private var ledgerRevision = 0L
+    private var planningRevision = 0L
     private val ledgerMutationMutex = Mutex()
     private val _session = MutableStateFlow(store.readSession())
     val session: StateFlow<Session?> = _session.asStateFlow()
@@ -123,7 +130,7 @@ class MoneyFlowRepository(
         return result
     }
 
-    suspend fun executeImport(action: PendingImportAction): ImportReceiptDto {
+    suspend fun executeImport(action: PendingImportAction): ImportReceiptDto = ledgerMutationMutex.withLock importMutation@ {
         action.validate()
         val current = requireSession()
         require(action.userId == current.user.id) { "Войдите в аккаунт, создавший подтверждение" }
@@ -145,13 +152,15 @@ class MoneyFlowRepository(
             database.withTransaction {
                 portfolioRevision++
                 ledgerRevision++
+                planningRevision++
+                dao.deletePlanningSnapshots(current.user.id)
                 dao.deleteLedgerSnapshots(current.user.id)
                 dao.deletePortfolios(current.user.id)
                 // Imported or removed entries may be outside the cached latest window.
                 dao.deleteTransactions(current.user.id, action.accountId)
             }
         }
-        return result
+        return@importMutation result
     }
 
     suspend fun refreshCategories() {
@@ -171,12 +180,12 @@ class MoneyFlowRepository(
         }
     }
 
-    suspend fun createCategory(request: CreateCategoryRequest): Category {
+    suspend fun createCategory(request: CreateCategoryRequest): Category = ledgerMutationMutex.withLock categoryMutation@ {
         val normalized = request.copy(name = normalizeCategoryName(request.name))
         normalized.validate()
         val current = requireSession()
         checkLedgerAllowsLegacyWrite(current.user.id)
-        return categorySyncMutex.withLock {
+        return@categoryMutation categorySyncMutex.withLock {
             check(isCurrentSession(current)) { "Сессия изменилась" }
             normalized.parentId?.let { parentId ->
                 val parent = mutex.withLock {
@@ -190,13 +199,17 @@ class MoneyFlowRepository(
                 !category.isDefault) { "Ответ сервера не соответствует создаваемой категории" }
             mutex.withLock {
                 check(isCurrentSession(current)) { "Сессия изменилась" }
-                dao.putCategories(listOf(CategoryEntity.from(current.user.id, category)))
+                database.withTransaction {
+                    dao.putCategories(listOf(CategoryEntity.from(current.user.id, category)))
+                    planningRevision++
+                    dao.deletePlanningSnapshots(current.user.id)
+                }
             }
             category
         }
     }
 
-    suspend fun setTransactionCategory(transaction: MoneyTransaction, categoryId: String?): MoneyTransaction {
+    suspend fun setTransactionCategory(transaction: MoneyTransaction, categoryId: String?): MoneyTransaction = ledgerMutationMutex.withLock categoryMutation@ {
         validateUuid(transaction.id)
         val current = requireSession()
         checkLedgerAllowsLegacyWrite(current.user.id)
@@ -210,11 +223,13 @@ class MoneyFlowRepository(
             check(isCurrentSession(current)) { "Сессия изменилась" }
             database.withTransaction {
                 ledgerRevision++
+                planningRevision++
+                dao.deletePlanningSnapshots(current.user.id)
                 dao.deleteLedgerSnapshots(current.user.id)
                 dao.putTransactions(listOf(TransactionEntity.from(current.user.id, result)))
             }
         }
-        return result
+        return@categoryMutation result
     }
 
     suspend fun fetchAnalytics(month: String, currency: String, timezone: String): MonthlyAnalytics {
@@ -266,7 +281,13 @@ class MoneyFlowRepository(
         val current = requireSession()
         mutex.withLock {
             if (!isCurrentSession(current)) return
-            dao.putPreferences(FxPreferencesEntity(current.user.id, base, true))
+            database.withTransaction {
+                if (dao.preferences(current.user.id)?.baseCurrency != base) {
+                    planningRevision++
+                    dao.deletePlanningSnapshots(current.user.id)
+                }
+                dao.putPreferences(FxPreferencesEntity(current.user.id, base, true))
+            }
         }
         refreshPreferences()
     }
@@ -281,7 +302,15 @@ class MoneyFlowRepository(
         } else api.preferences("Bearer ${current.token}").validated()
         mutex.withLock {
             if (!isCurrentSession(current) || dao.preferences(current.user.id) != before) return@withLock
-            dao.putPreferences(FxPreferencesEntity(current.user.id, remote.baseCurrency, false))
+            database.withTransaction {
+                // Until planning settings are explicitly saved, their default follows the app base.
+                // Once settings exist this refresh only discards a harmless read-only snapshot.
+                if ((before != null && before.baseCurrency != remote.baseCurrency) || before?.pendingSync == true) {
+                    planningRevision++
+                    dao.deletePlanningSnapshots(current.user.id)
+                }
+                dao.putPreferences(FxPreferencesEntity(current.user.id, remote.baseCurrency, false))
+            }
         }
     }
 
@@ -363,12 +392,14 @@ class MoneyFlowRepository(
             _ledgerPending.value = null
             _ledgerRecoveryUnavailable.value = false
             ledgerRevision++
+            planningRevision++
             if (userId != null) database.withTransaction {
                 dao.deleteAccounts(userId)
                 dao.deleteUserTransactions(userId)
                 dao.deleteLedgerSnapshots(userId)
                 dao.deletePortfolios(userId)
                 dao.deleteCategories(userId)
+                dao.deletePlanningSnapshots(userId)
             }
         }
     }
@@ -404,7 +435,7 @@ class MoneyFlowRepository(
         }
     }
 
-    suspend fun createAccount(body: CreateAccountRequest, expectedSession: Session? = null): Account {
+    suspend fun createAccount(body: CreateAccountRequest, expectedSession: Session? = null): Account = ledgerMutationMutex.withLock accountMutation@ {
         val current = requireSession()
         require(expectedSession == null || (expectedSession.token == current.token && expectedSession.user.id == current.user.id)) {
             "Сессия изменилась"
@@ -419,13 +450,15 @@ class MoneyFlowRepository(
             database.withTransaction {
                 dao.putAccounts(listOf(AccountEntity.from(userId, account)))
                 portfolioRevision++
+                planningRevision++
+                dao.deletePlanningSnapshots(userId)
                 dao.deletePortfolios(userId)
             }
         }
-        return account
+        return@accountMutation account
     }
 
-    suspend fun createTransaction(body: CreateTransactionRequest): MoneyTransaction {
+    suspend fun createTransaction(body: CreateTransactionRequest): MoneyTransaction = ledgerMutationMutex.withLock transactionMutation@ {
         body.validate()
         val current = requireSession()
         val userId = current.user.id
@@ -445,13 +478,13 @@ class MoneyFlowRepository(
                 request
             }
         }
-        return submitPending(pending)
+        return@transactionMutation submitPending(pending)
     }
 
-    suspend fun retryPending(): MoneyTransaction {
+    suspend fun retryPending(): MoneyTransaction = ledgerMutationMutex.withLock transactionRetry@ {
         val request = _pending.value ?: throw IllegalStateException("Нет ожидающей операции")
         require(request.userId == requireUserId())
-        return submitPending(request)
+        return@transactionRetry submitPending(request)
     }
 
     private suspend fun submitPending(request: PendingTransaction): MoneyTransaction {
@@ -491,6 +524,8 @@ class MoneyFlowRepository(
                     dao.deleteTransactions(request.userId, transaction.accountId)
                     dao.deleteLedgerSnapshots(request.userId)
                     ledgerRevision++
+                    planningRevision++
+                    dao.deletePlanningSnapshots(request.userId)
                     portfolioRevision++
                     dao.deletePortfolios(request.userId)
                 }
@@ -558,7 +593,62 @@ class MoneyFlowRepository(
         return result
     }
 
-    suspend fun mutateLedger(operation: String, entityId: String?, body: JsonObject): JsonObject = ledgerMutationMutex.withLock {
+    /** The server owns every total; the device only validates and caches the matching read. */
+    suspend fun planning(month: String, forecastUntil: String? = null): CachedPlanning = coroutineScope {
+        val selected = PlanningCalendar.validateMonth(month)
+        forecastUntil?.let(PlanningCalendar::validateDate)
+        val from = selected.atDay(1).toString(); val to = selected.atEndOfMonth().toString()
+        val current = requireSession(); val revision = mutex.withLock { planningRevision }
+        val reportRequest = async { api.planning(from, to, "Bearer ${current.token}").validated(from, to) }
+        val forecastRequest = async { api.forecast(forecastUntil, "Bearer ${current.token}").validated(forecastUntil) }
+        val report = reportRequest.await(); val forecast = forecastRequest.await()
+        require(report.settings.baseCurrency == forecast.baseCurrency && report.settings.reserveMinor == forecast.reserveMinor) {
+            "Настройки расчёта изменились; обновите план"
+        }
+        require(report.today == forecast.asOf) { "Начался новый день; обновите план" }
+        val result = CachedPlanning(report, forecast, Instant.now())
+        mutex.withLock {
+            check(isCurrentSession(current) && planningRevision == revision) { "Данные изменились; обновите план" }
+            database.withTransaction {
+                dao.putPlanningSnapshot(PlanningSnapshotEntity(current.user.id, month, forecastUntil.orEmpty(),
+                    Gson().toJson(PlanningCachePayload(report, forecast)), result.receivedAt.toString()))
+                dao.prunePlanningSnapshots(current.user.id)
+            }
+        }
+        result
+    }
+
+    suspend fun cachedPlanning(month: String, forecastUntil: String? = null): CachedPlanning? {
+        val selected = PlanningCalendar.validateMonth(month); forecastUntil?.let(PlanningCalendar::validateDate)
+        val current = requireSession()
+        val row = dao.planningSnapshot(current.user.id, month, forecastUntil.orEmpty()) ?: return null
+        check(isCurrentSession(current)) { "Сессия изменилась" }
+        return runCatching {
+            val value = Gson().fromJson(row.payload, PlanningCachePayload::class.java)
+            value.report.validated(selected.atDay(1).toString(), selected.atEndOfMonth().toString())
+            value.forecast.validated(forecastUntil)
+            require(value.report.settings.baseCurrency == value.forecast.baseCurrency && value.report.settings.reserveMinor == value.forecast.reserveMinor)
+            require(value.report.today == value.forecast.asOf)
+            CachedPlanning(value.report, value.forecast, Instant.parse(row.receivedAt))
+        }.getOrNull()
+    }
+
+    /** Generic reminders use a fresh authenticated count, never cached financial amounts. */
+    suspend fun planningReminderDueCount(expectedSession: Session): Int? {
+        if (!isCurrentSession(expectedSession)) return null
+        val today = PlanningCalendar.today().toString()
+        val report = try {
+            api.planning(today, today, "Bearer ${expectedSession.token}").validated(today, today)
+        } catch (error: HttpException) {
+            if (error.code() == 401) expireSession(expectedSession)
+            throw error
+        }
+        if (!isCurrentSession(expectedSession) || report.today != today) return null
+        return Math.addExact(report.overdueCount,
+            report.occurrences.count { it.status == "pending" && it.dueDate == today })
+    }
+
+    suspend fun mutateLedger(operation: String, entityId: String?, body: JsonObject, occurrenceDate: String? = null): JsonObject = ledgerMutationMutex.withLock {
         val current = requireSession()
         val request = withContext(Dispatchers.IO) { mutex.withLock {
             check(isCurrentSession(current)) { "Сессия изменилась" }
@@ -567,10 +657,10 @@ class MoneyFlowRepository(
             require(!importBlocked(current.user.id)) { "Сначала подтвердите ожидающий импорт" }
             val existing = ledgerRecovery?.read(current.user.id) ?: _ledgerPending.value
             val serialized = body.toString()
-            require(existing == null || (existing.operation == operation && existing.entityId == entityId && existing.body == serialized)) {
+            require(existing == null || (existing.operation == operation && existing.entityId == entityId && existing.body == serialized && existing.occurrenceDate == occurrenceDate)) {
                 "Сначала повторите сохранённое изменение"
             }
-            val pending = existing ?: PendingLedgerMutation(current.user.id, UUID.randomUUID().toString(), operation, entityId, serialized)
+            val pending = existing ?: PendingLedgerMutation(current.user.id, UUID.randomUUID().toString(), operation, entityId, serialized, occurrenceDate)
             pending.validate()
             requireNotNull(ledgerRecovery) { "Хранилище подтверждений недоступно" }.write(pending)
             _ledgerPending.value = pending
@@ -593,7 +683,8 @@ class MoneyFlowRepository(
             val response = when (request.method) {
                 "PUT" -> api.ledgerPut(request.path, body, request.key, "Bearer ${current.token}")
                 "DELETE" -> api.ledgerDelete(request.path, body, request.key, "Bearer ${current.token}")
-                else -> api.ledgerPost(request.path, body, request.key, "Bearer ${current.token}")
+                "POST" -> api.ledgerPost(request.path, body, request.key, "Bearer ${current.token}")
+                else -> throw IllegalArgumentException("Неизвестный метод подтверждения")
             }
             validateLedgerAcknowledgement(request, response)
             response
@@ -601,7 +692,8 @@ class MoneyFlowRepository(
             val code = runCatching { Gson().fromJson(error.response()?.errorBody()?.source()?.peek()?.readUtf8(), ErrorBody::class.java)?.error?.code }.getOrNull()
             val definitive = error.code() in setOf(400, 403, 404, 410, 413, 415, 422) ||
                 (error.code() == 409 && code in setOf("version_conflict", "balance_overflow", "archived_account", "archived_category",
-                    "transaction_deleted", "transaction_active", "transfer_managed", "imported_account_immutable", "import_undone", "category_conflict", "category_exists", "transfer_deleted", "transfer_active"))
+                    "transaction_deleted", "transaction_active", "transfer_managed", "imported_account_immutable", "import_undone", "category_conflict", "category_exists", "transfer_deleted", "transfer_active",
+                    "budget_overlap", "schedule_anchor_locked", "planning_limit", "archived_schedule", "paused", "occurrence_posted", "occurrence_state", "conversion_overflow"))
             if (definitive) clearLedgerPending(request)
             throw error
         }
@@ -609,6 +701,8 @@ class MoneyFlowRepository(
             check(isCurrentSession(current)) { "Сессия изменилась" }
             database.withTransaction {
                 ledgerRevision++; portfolioRevision++
+                planningRevision++
+                dao.deletePlanningSnapshots(current.user.id)
                 dao.deleteUserTransactions(current.user.id)
                 dao.deleteLedgerSnapshots(current.user.id)
                 dao.deletePortfolios(current.user.id)
@@ -629,6 +723,10 @@ class MoneyFlowRepository(
 
     private fun validateLedgerAcknowledgement(request: PendingLedgerMutation, response: JsonObject) {
         val gson = Gson(); val body = request.json()
+        if (request.operation in PendingLedgerMutation.PLANNING_OPERATIONS) {
+            validatePlanningAcknowledgement(request, response)
+            return
+        }
         if (request.operation == "mergecategory") {
             gson.fromJson(response, CategoriesResponse::class.java).toDomain()
             return
@@ -651,13 +749,14 @@ class MoneyFlowRepository(
                         it.amountMinor.toString() == body["amount_minor"].asString && it.note == body["note"].asString)
                 }
             }
-            else -> gson.fromJson(response, TransferDto::class.java).toDomain().let {
+            request.operation in setOf("createtransfer", "edittransfer", "deletetransfer", "restoretransfer") -> gson.fromJson(response, TransferDto::class.java).toDomain().let {
                 id = it.id; version = it.version; deleted = it.deletedAt != null
                 if (request.operation in setOf("createtransfer", "edittransfer")) require(
                     it.fromAccountId == body["from_account_id"].asString && it.toAccountId == body["to_account_id"].asString &&
                         it.fromAmountMinor.toString() == body["from_amount_minor"].asString && it.toAmountMinor.toString() == body["to_amount_minor"].asString &&
                         it.feeAmountMinor.toString() == body["fee_amount_minor"].asString && it.note == body["note"].asString)
             }
+            else -> throw IllegalArgumentException("Неизвестный ответ подтверждения")
         }
         require(request.entityId == null || id == request.entityId)
         if (body.has("expected_version")) require(version == Math.addExact(body["expected_version"].asLong, 1))

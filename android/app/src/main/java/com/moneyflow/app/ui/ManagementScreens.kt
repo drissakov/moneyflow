@@ -304,7 +304,7 @@ private fun P0CategoryMerge(state: LedgerUiState, viewModel: LedgerViewModel, so
     val targets = state.categories.filter { it.kind == source.kind && !it.archived && it.id !in forbidden }
     val target = targets.firstOrNull { it.id == targetId }
     if (confirming && target != null) {
-        P0Confirmation("Объединить категории?", "Все операции категории «${source.name}» и её подкатегорий перейдут в «${categoryPath(target.id, state.categories)}». Исходная категория и её подкатегории будут архивированы. Автоматически отменить объединение нельзя.",
+        P0Confirmation("Объединить категории?", "Все операции категории «${source.name}» и её подкатегорий перейдут в «${categoryPath(target.id, state.categories)}». Будущие плановые операции также перейдут в эту категорию, а бюджеты исходной ветки будут архивированы. Исходная категория и её подкатегории будут архивированы. Автоматически отменить объединение нельзя.",
             "Объединить историю", "category_merge", state, viewModel, { confirming = false }) { viewModel.mergeCategory(source.copy(version = baseVersion), target) }
         return
     }

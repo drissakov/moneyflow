@@ -6,7 +6,7 @@ The app has Russian UI and supports 11 curated currencies: KZT, USD, EUR, JPY,
 KWD, RUB, GBP, CHF, AUD, CAD and CNY. This is the application's supported catalog,
 not the full upstream provider catalog.
 
-Version 0.3.0 uses a monochrome Material 3 palette in both system light and dark
+Version 0.5.0 uses a monochrome Material 3 palette in both system light and dark
 themes. The aggregate balance of all accounts leads the overview, valued in KZT
 by default; changing the selected account only changes its transaction list.
 Individual accounts show their original and converted balances; calculation
@@ -55,6 +55,26 @@ Migration 2 → 3 adds the user-scoped category cache and a nullable transaction
 category ID. Existing transactions remain uncategorized until assigned by the user.
 Migration 3 → 4 adds the movement flag with a default of false; existing history
 is preserved. Movements affect balances and stay out of income/expense charts.
+Migration 4 → 5 adds the versioned ledger caches; 5 → 6 adds user-scoped planning
+snapshots without recreating existing tables. The server must apply migration
+006 before this app uses budgets, schedules and forecasts.
+
+## Planning (P1)
+
+Open More → Planning or the dashboard's safe-to-spend card. Budgets track monthly
+category spending in the original currency, including child categories. Scheduled
+income/expense remains separate from the ledger until explicitly confirmed.
+Weekly, monthly and yearly repeats retain their original calendar anchor.
+
+Safe-to-spend subtracts a reserve and unpaid mandatory expenses from selected cash
+and card balances. Expected income never creates spendable funds. Planning has
+its own base currency and uses the existing current FX cache; incomplete quotes or
+truncated history suppress aggregate totals. Cached planning is read-only.
+
+Optional reminders use Android JobScheduler with a daily interval, network access
+and Android 13 notification permission. They show no financial amounts, require
+the captured user session to remain valid, and open Planning. Delivery depends on
+Android scheduling and is not an exact alarm. See [P1 rules and QA](../docs/PLANNING.md).
 
 ## PDF statement import
 
@@ -155,6 +175,5 @@ Screens use semantic text labels and test tags (`auth_email`, `auth_password`,
 `account_submit`, `add_transaction`, `transaction_amount`, `transaction_note`,
 `transaction_submit`, `retry_pending`, `refresh`, `logout`).
 
-Transfers, category management, edits, refresh tokens and queued offline writes
-are future milestones. The combined balance is an informational valuation; account
+Refresh tokens and queued offline writes remain future milestones. The combined balance is an informational valuation; account
 balances are never automatically converted or rewritten.
